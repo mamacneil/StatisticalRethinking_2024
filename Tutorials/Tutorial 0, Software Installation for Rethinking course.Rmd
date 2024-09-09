@@ -1,0 +1,61 @@
+---
+title: "Tutorial 0, Software Installation for Rethinking course"
+author: "Arun Oakley-Cogan"
+date: "2024-08-28"
+output: html_document
+---
+
+### 1. Install C++ Toolchain
+
+Do you need it?? Open up command prompt (Windows) or Terminal (macOS)
+
+#### macOS
+
+clang++ --version
+make --version
+
+#### Windows
+
+g++ --version
+make --version
+
+If you get a response from both of these commands you can go to step 2! Otherwise,
+
+Go to: <https://mc-stan.org/docs/cmdstan-guide/cmdstan-installation.html#cpp-toolchain>
+
+and follow instructions for your operating system
+
+### 2. Install CmdStanR
+
+```{r}
+install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
+cmdstanr::install_cmdstan()
+```
+
+### 3. Install Rethinking Package
+
+```{r}
+install.packages(c("coda","mvtnorm","devtools","loo","dagitty","shape"))
+devtools::install_github("rmcelreath/rethinking")
+```
+
+### 4. Install Common R packages
+
+```{r}
+install.packages(c("ggplot2", "tidyverse", "bayesplot"))
+```
+
+### 5. Test Installation
+
+```{r}
+library(rethinking)
+
+fit_stan <- ulam(
+  alist(
+    y ~ dnorm( mu , sigma ),
+    mu ~ dnorm( 0 , 10 ),
+    sigma ~ dexp( 1 )
+  ), data=list(y=c(-1,1)) 
+)
+precis(fit_stan)
+```
