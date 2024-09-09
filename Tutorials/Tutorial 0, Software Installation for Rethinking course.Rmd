@@ -2,7 +2,6 @@
 title: "Tutorial 0, Software Installation for Rethinking course"
 author: "Arun Oakley-Cogan"
 date: "2024-08-28"
-output: html_document
 ---
 
 ### 1. Install C++ Toolchain
