@@ -1,0 +1,154 @@
+---
+title: "Tutorial 1, Our first model."
+author: "Arun Oakley-Cogan"
+date: "2024-09-04"
+output: html_document
+---
+
+```{r message = F}
+library(tidyverse)
+library(rethinking)
+```
+
+### Our first model. Estimating the presence/absence of frogs at a pond.
+
+**Scenario**: We go to a pond 30 times and record the presence (1) or absence (0) of frogs, and estimate the probability of seeing a frog when visiting the pond.
+
+**Workflow**
+
+1.  Define what we are estimating
+2.  Build generative model to simulate data
+3.  Build statistical model
+4.  Validate statistical model with simulated data
+5.  Apply to real data.
+
+### Generative model and simulated data.
+
+```{r}
+# number of trips to pond
+n_trips <- 30
+
+# the true probability of seeing a frog in this pond
+true_prob <- 0.3
+
+# simulate data from generative model
+sim_data <- rbinom(n_trips, size = 1, prob = true_prob)
+
+# data for model
+data_list <- list(
+  trips = length(sim_data), # total number of trips
+  frogs = sum(sim_data) # number of times seen frogs
+)
+sim_data;
+data_list
+```
+
+### Build statistical model: grid approximation
+
+**Model Components**
+
+-   **Grid**, a finite set of parameters values to be used
+-   **Prior Distribution**, prior probability for each value of the parameter
+-   **Data Likelihood**, the distribution function assigned to our observed variables. This function gives us the likelihood of the data for every plausible value of our parameter.
+-   **Posterior Distribution**, contains the probability of different parameter values, conditional on the data and model.
+
+#### Bayesian Notation
+
+$$F \sim Binomial(n, p)$$ $$p \sim Uniform(0,1)$$
+
+```{r}
+# grid approximation method
+# define our parameter grid
+par_grid <- seq(from=0, to=1, length.out=20)
+
+# define a uniform prior
+prior <- rep(1, length(par_grid))
+prior <- prior / sum(prior)
+
+# estimate the likelihood of seeing frogs in this many trips
+likelihood <- dbinom(data_list$frogs, data_list$trips, prob = par_grid)
+
+# estimate posterior
+posterior <- (likelihood * prior) / sum(likelihood * prior)
+
+# plot posterior distribution
+plot(par_grid, posterior, col='blue', type='b' , xlab='Probability of seeing frogs', ylab='Density')
+# plot prior distribution
+points(x = par_grid, y = prior, type='b', col='orange')
+abline(v = 0.3, col="red")
+legend("topright", legend=c("Posterior", "Prior", "True Probability"),
+       col=c("blue", "orange", "red"), lty=1)
+
+```
+
+```{r}
+# summarise our posterior - grid approximation
+samples <- sample( par_grid , prob=posterior , size=1000 , replace=TRUE )
+
+# mean
+mean(samples)
+
+# how much of the posterior is above/below a value?
+sum( posterior[ par_grid < 0.4 ] )
+sum( posterior[ par_grid > 0.4 ] )
+
+# compatibility intervals
+# percentile intervals (PI) - even distribution above/below interval, indicate shape of distribution
+PI(samples, prob=0.5) 
+# highest posterior density interval (HPDI) - best representatives of parameter values
+HPDI(samples, prob=0.5)
+
+```
+
+### Build statistical model: MCMC (ulam)
+
+```         
+a.  **Model data,** a list containing our variables and data
+b.  **Prior Distribution**, prior probability of the parameter at each probability
+c.  **Data Likelihood**, the distribution function assigned to our observed variables. This function gives us the likelihood of the data for every plausible value of our parameter.
+```
+
+```{r}
+# model data
+data_list
+```
+
+```{r}
+# MCMC method using ulam
+frog_model <- ulam(
+  alist(
+    frogs ~ dbinom(trips, p), # data likelihood
+    p ~ dunif(0, 1) # p prior
+  ), data = data_list
+)
+
+```
+
+```{r}
+# model summary
+precis(frog_model)
+```
+
+```{r}
+# posterior samples
+samples <- extract.samples(frog_model, n=10000)
+
+# plots
+curve(dnorm(x, mean(samples$p), sd(samples$p)), xlab="Probability of seeing frogs", ylab="Density", col="blue")
+curve((dunif(x, 0, 1)), add = TRUE, col="orange")
+abline(v = 0.3, col="red")
+legend("topright", legend=c("Posterior", "Prior", "True Probability"),
+       col=c("blue", "orange", "red"), lty=1)
+```
+
+```{r}
+# posterior summaries
+# above 30%
+sum(samples$p > 0.3) / length(samples$p)
+
+# compatibility intervals
+# percentage interval
+PI(samples$p, prob=0.5)
+# highest posterior density interval
+HPDI(samples$p, prob=0.5)
+```
