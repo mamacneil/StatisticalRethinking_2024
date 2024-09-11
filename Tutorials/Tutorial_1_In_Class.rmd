@@ -1,0 +1,116 @@
+---
+title: "Tutorial 1, Our first model."
+author: "Arun Oakley-Cogan"
+date: "2024-09-04"
+output: html_document
+---
+
+```{r message = F}
+library(tidyverse)
+library(rethinking)
+```
+
+### Our first model. Estimating the presence/absence of frogs at a pond.
+
+**Scenario**: We go to a pond 30 times and record the presence (1) or absence (0) of frogs, and estimate the probability of seeing a frog when visiting the pond.
+
+**Workflow**
+
+1.  Define what we are estimating - p, the prob of seeing a frog
+2.  Build generative model to simulate data
+3.  Build statistical model
+4.  Validate statistical model with simulated data
+5.  Apply to real data.
+
+### Generative model and simulated data.
+
+```{r}
+# number of trips to pond
+
+# the true probability of seeing a frog in this pond
+
+# simulate data from generative model
+
+# data for model
+
+```
+
+### Build statistical model: grid approximation
+
+**Model Components**
+
+-   **Grid**, a finite set of parameters values to be used
+-   **Prior Distribution**, prior probability for each value of the parameter
+-   **Data Likelihood**, the distribution function assigned to our observed variables. This function gives us the likelihood of the data for every plausible value of our parameter.
+-   **Posterior Distribution**, contains the probability of different parameter values, conditional on the data and model.
+
+#### Bayesian Notation
+
+$$F \sim Binomial(n, p)$$ $$p \sim Uniform(0,1)$$
+
+```{r}
+# grid approximation method
+# define our paramatrer grid
+
+
+# define a uniform prior
+
+# estimate the data likelihood of seeing frogs this many times in trips
+
+# estimate posterior
+
+# plot posterior distribution
+#plot(par_grid, posterior, col='blue', type='b' , xlab='Probability of seeing frogs', ylab='Density')
+# plot prior distribution
+#points(x = par_grid, y = prior, type='b', col='orange')
+#abline(v = true_prob, col="red")
+#legend("topright", legend=c("Posterior", "Prior", "True Probability"), col=c("blue", "orange", "red"), lty=1)
+
+```
+
+```{r}
+# summarise our posterior - grid approximation sample(x,p,size,rep)
+# mean
+
+# how much of the posterior is above/below a value? x[p<value]
+
+# compatibility intervals
+# highest posterior density interval (HPDI) - best representatives of parameter values
+
+```
+
+3.  Build our model: **MCMC (ulam)**
+    a.  **Model data,** a list containing our variables and data
+    b.  **Prior Distribution**, prior probability of the parameter at each probability
+    c.  **Data Likelihood**, the distribution function assigned to our observed variables. This function gives us the likelihood of the data for every plausible value of our parameter.
+
+```{r}
+# model data
+```
+
+```{r}
+# MCMC method using ulam
+```
+
+```{r}
+# model summary
+```
+
+```{r}
+# posterior samples
+samples <- extract.samples(frog_model, n = 10000)
+# plots
+#curve(dnorm(x, mean(samples$p), sd(samples$p)), xlab="Probability of seeing frogs", ylab="Density", col="blue")
+#curve((dunif(x, 0, 1)), add = TRUE, col="orange")
+#abline(v = true_prob, col="red")
+#legend("topright", legend=c("Posterior", "Prior", "True Probability"), col=c("blue", "orange", "red"), lty=1)
+```
+
+```{r}
+# posterior summaries
+# above 30%
+
+# compatibility intervals
+# highest posterior density interval
+
+```
