@@ -1,0 +1,303 @@
+---
+title: "WK2L2"
+author: "Arun Oakley-Cogan"
+date: "2024-09-16"
+output: html_document
+---
+
+## Week 2 Lecture 2 - Geocentric models and wiggly orbits
+
+```{r setup, include=FALSE}
+library(rethinking)
+library(tidyr)
+```
+
+## !Kung Kids
+
+Let's import the Nancy Howell's data from the Kalahari people and take a look:
+
+```{r cars}
+# import data - All data sets are available through the rethinking library
+data("Howell1") # load data set
+kdata <- Howell1 # make a copy
+# Display top 6 rows
+head(kdata)
+```
+
+```{r}
+# Table of descriptive statistics
+precis(xdata)
+```
+
+let's take a look at the distribution of the data
+
+```{r}
+#plot the distribution of adult heights
+plot(density(kdata$height), xlab="Height (cm)", main="!Kung heights from Nancy Howell")
+```
+
+Long tails here, what's going on?
+
+```{r}
+# assign a a grouping value to people aged before and after 17
+kdata$age_group <- ifelse(kdata$age>17,1,2)
+plot(kdata$weight, kdata$height, type='p', col=factor(kdata$age_group), xlab='Weight (kg)', ylab='Height (cm)')
+```
+
+Ah, those pesky kids. So our glorious linearity among the adults is now gone. So how should we model this relationship?
+
+# Curves from 'linear models'
+
+### Link functions
+
+-   common
+-   ok
+
+### Polynomial regression
+
+-   common
+-   bad
+
+### Splines
+
+-   very flexible
+-   highly geocentric
+
+## Link functions
+
+Link functions are present in every statistical model as they translate the model scale - which can be log-odds for example - onto the observation scale. A log-link or logit-link are common choices. Let's see what a log link does to our plot:
+
+```{r}
+plot(log(kdata$weight), kdata$height, type='p', col=factor(kdata$age_group), xlab='Weight (kg)', ylab='Height (cm)')
+```
+
+Near linearity - very helpful.
+
+## Polynomial Regression
+
+If you care not about any sort of process but are confident in the relative shape of what you want, a polynomial can **sometimes** be worth a look.
+
+$1^{st}$ order (line): $\mu_i = \beta_0+\beta_1 x_i$
+
+$2^{nd}$ order (parabola): $\mu_i = \beta_0+\beta_1 x_i+\beta_2 x^{2}_i$
+
+$3^{rd}$ order (cubic): $\mu_i = \beta_0+\beta_1 x_i+\beta_2 x^{2}_i+\beta_3 x^{3}_i$
+
+$n^{th}$ order (insanity): $\mu_i = \beta_0+\beta_1 x_i+\beta_2 x^{2}_i+...+\beta_n x^{n}_i$
+
+And it goes on...with increasingly uninterpretable results. Even the parabolic parameters are not individually interpretable, so be careful!!
+
+## Polynomial !Kungs
+
+So let's try fitting a parabola and see how well it does. As a first step we're going to standardize the data, meaning we'll subtract the mean (as always) and also divide by the standard deviation\*. Why? Because it makes the intercept interpretable (as with zero-centering) and because it places things on a small-ish scale near zero, where likelihoods don't explode.
+
+\*Note I typically standardize by 2sd because it makes 0-1 (dummy) variables comparable with standardized variables, allowing us to look at **relative** effect sizes
+
+```{r}
+kweights <- (kdata$weight-mean(kdata$weight))/sd(kdata$weight)
+hist(kweights, xlab="Height (z-score)", main="!Kung heights from Nancy Howell")
+```
+So for our model:
+
+$$
+\large{
+\begin{align*}
+z_i &= \frac{x_i-\bar{x}}{SD(x)} \\
+h_i &\sim N(\mu_i,\sigma) \\
+\mu_i &= \beta_0 + \beta_1z_i + \beta_2z^{2}_i \\
+\beta_0 &\sim N(178,20) \\
+\beta_1 &\sim logN(0,1) \\
+\beta_2 &\sim N(0,1) \\
+\sigma &\sim U(0, 50)
+\end{align*}}
+$$
+
+We've added the quadratic parameter $\beta_2$, for which we have specified a $N(0,1)$ prior. Why? Weelll based on the recommendations of our modern-day Bayesian Yoda [Andrew Gelman](http://www.stat.columbia.edu/~gelman/), who very often standardizes covariates and uses $N(0,1)$ priors in his own work. He's done the legwork, so we take it and move on.
+
+Coding this into model, we get:
+
+```{r}
+# setup model data
+model_data <- list(
+  height = kdata$height,
+  weight = kweights
+)
+
+kung <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # likelihood
+    mu <- b0 + b1*weight + b2*weight**2, #linear model
+    b0 ~ dnorm(178,20),
+    b1 ~ dlnorm(0,1),
+    b2 ~ dnorm(0,1),
+    sigma ~ dunif(0,50)
+  ), data = model_data
+)
+```
+```{r}
+posterior <- extract.samples(kung)
+b0_mean = mean(posterior$b0)
+b1_mean = mean(posterior$b1)
+b2_mean = mean(posterior$b2)
+sig_mean = mean(posterior$sigma)
+```
+
+```{r}
+
+plot(kweights, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)')
+# mean line
+curve( b0_mean + b1_mean*x + b2_mean*x**2 , from=-2 , to=2 , add=TRUE , col="black" )
+# upper uncertainty bounds
+curve(  (b0_mean + b1_mean*x + b2_mean*x**2)+sig_mean*2 , from=-2 , to=2 , add=TRUE , col="black", lty=2 )
+# lower uncertainty bounds
+curve(  (b0_mean + b1_mean*x + b2_mean*x**2)-sig_mean*2 , from=-2 , to=2 , add=TRUE , col="black", lty=2 )
+```
+Another way of plotting the intervals is to to make random draws from the posterior distribution, which contains a multitude of wiggly lines
+```{r}
+plot(kweights, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)')
+for (i in 1:100) {
+  b0_ <- sample(posterior$b0, 1)
+  b1_ <- sample(posterior$b1, 1)
+  b2_ <- sample(posterior$b2, 1)
+  curve( b0_ + b1_*x + b2_*x**2 , from=-2 , to=2 , add=TRUE , col="black" )
+}
+```
+A key part of polynomials is that they often do a horrific job outside of the data, flopping around everywhere. This is clear if we look at slightly heavier people
+
+```{r}
+plot(kweights, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)', xlim=c(-2,2.5))
+for (i in 1:100) {
+  b0_ <- sample(posterior$b0, 1)
+  b1_ <- sample(posterior$b1, 1)
+  b2_ <- sample(posterior$b2, 1)
+  curve( b0_ + b1_*x + b2_*x**2 , from=-2 , to=2.5 , add=TRUE , col="black" )
+}
+```
+(shrinking large people...)
+
+What about 3rd order?
+
+```{r}
+kung3 <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # likelihood
+    mu <- b0 + b1*weight + b2*weight**2 + b3*weight**3, #linear model
+    b0 ~ dnorm(178,20),
+    b1 ~ dlnorm(0,1),
+    b2 ~ dnorm(0,1),
+    b3 ~ dnorm(0,1),
+    sigma ~ dunif(0,50)
+  ), data = model_data
+)
+```
+```{r}
+posterior <- extract.samples(kung3)
+b0_mean = mean(posterior$b0)
+b1_mean = mean(posterior$b1)
+b2_mean = mean(posterior$b2)
+b3_mean = mean(posterior$b3)
+sig_mean = mean(posterior$sigma)
+```
+
+```{r}
+plot(kweights, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)')
+# mean line
+curve( b0_mean + b1_mean*x + b2_mean*x**2 + b3_mean*x**3 , from=-2 , to=2 , add=TRUE , col="black" )
+# upper uncertainty bounds
+curve(  (b0_mean + b1_mean*x + b2_mean*x**2 + b3_mean*x**3)+sig_mean*2 , from=-2 , to=2 , add=TRUE , col="black", lty=2 )
+# lower uncertainty bounds
+curve(  (b0_mean + b1_mean*x + b2_mean*x**2 + b3_mean*x**3)-sig_mean*2 , from=-2 , to=2 , add=TRUE , col="black", lty=2 )
+```
+
+# Splines
+
+ - Basis-Splines: wiggly function build from many local less wiggly functions
+ - Basis function: a local function
+ - Better than polynomials, but equally geocentric
+ - Bayesian B-splines called *P-splines*
+ 
+So what does these B-splines look like? Well they're just linear models that have synthetic variables (B's):
+
+$$
+\mu_i = \beta_0 + w_1 B_{i,1}+ w_2 B_{i,2}+...++ w_n B_{i,n}
+$$
+
+w - are weights that are just like slopes, while the basis functions turn on these weights for specific regions of *x*. 
+
+To make this clear, let's have a look at the Japanese cherry blossom data:
+
+```{r}
+data(cherry_blossoms) 
+# drop na
+cdata <- cherry_blossoms %>% drop_na()
+precis(cdata)
+```
+
+```{r}
+# get max temp over all years below 1800
+max_temp <- cdata %>% filter(year < 1800) %>% filter(temp == max(temp))
+plot(cdata$year, cdata$temp, type='p', col=rangi2, xlab='Year', ylab='March temp')
+abline(h=max_temp$temp, col="red")
+```
+So if we're going to put splines through this, how do they work? Well the algorithm needs to:
+
+ - choose knots (places where the spline is anchored)
+ - choose degree of basis functions (how wiggly)
+ - find posterior distribution of the weights
+ 
+So to start, let's pick some arbitrary knots across equal quantiles across the data:
+
+```{r}
+num_knots <- 15 
+naughts <- quantile( cdata$year , probs=seq(0,1,length.out=num_knots) )
+naughts
+```
+So how do we choose the degree of basis functions?
+
+Well, can start with basis functions which are degree 1, which make them a linear combination at 2 points:
+
+```{r}
+library(splines) 
+B <- bs(cdata$year, knots=knot_list[-c(1,num_knots)] , degree=1 , intercept=TRUE )
+plot( NULL , xlim=range(cdata$year) , ylim=c(0,1) , xlab="year" , ylab="basis" ) 
+for ( i in 1:ncol(B) ) lines( cdata$year , B[,i] )
+```
+```{r}
+B <- bs(cdata$year, knots=knot_list[-c(1,num_knots)] , degree=2 , intercept=TRUE )
+plot( NULL , xlim=range(cdata$year) , ylim=c(0,1) , xlab="year" , ylab="basis" ) 
+for ( i in 1:ncol(B) ) lines( cdata$year , B[,i] )
+```
+The weird thing about this is that it is just a linear model, which we can calculate in Stan:
+
+```{r}
+model_data <- list(
+  D = cdata$doy,
+  B = B
+)
+
+temps <- quap(
+  alist(
+    D ~ dnorm(mu, sigma), # likelihood
+    mu <- a + B %*% w,
+    a ~ dnorm(100,10),
+    w ~ dnorm(0,10),
+    sigma ~ dexp(1)
+  ), data=model_data, start=list(w=rep(0, ncol(B)))
+)
+```
+
+
+```{r}
+post <- extract.samples( temps ) 
+w <- apply( post$w , 2 , mean ) 
+plot( NULL , xlim=range(cdata$year) , ylim=c(-6,6) , xlab="year" , ylab="basis * weight" ) 
+for ( i in 1:ncol(B) ) lines( cdata$year , w[i]*B[,i] )
+```
+
+```{r}
+mu <- link( temps ) 
+mu_PI <- apply(mu,2,PI,0.97) 
+plot( cdata$year , cdata$doy , col=col.alpha(rangi2,0.3) , pch=16 ) 
+shade( mu_PI , cdata$year , col=col.alpha("black",0.5))
+```
+
