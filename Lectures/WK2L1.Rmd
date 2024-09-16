@@ -1,0 +1,400 @@
+---
+title: "Week 2 Lecture 1 - Bayesian coding"
+author: "Arun Oakley-Cogan"
+date: "2024-09-13"
+output: html_document
+---
+
+# Week 2 Lecture 1 - Bayesian coding
+
+McElreath's lectures for the whole book are available here: <https://github.com/rmcelreath/stat_rethinking_2022>
+
+An excellent port to Python/PyMC Code is available here: <https://github.com/dustinstansbury/statistical-rethinking-2023>
+
+You are encouraged to work through both of these versions to re-enforce what we're doing in class.
+
+```{r}
+# import R libraries
+#install.packages(c('plotly', 'pracma')) # this is for 3D plotting
+library(rethinking)
+library(ggplot2)
+library(plotly)
+library(tidyr)
+library(pracma)
+```
+
+## Kalahari foragers example
+
+Let's import the Nancy Howell's data from the Kalahari people and take a look:
+
+```{r}
+# import data - All data sets are available through the rethinking library
+data("Howell1") # load data set
+xdata <- Howell1 # make a copy
+# Disoplay top 6 rows
+head(xdata)
+```
+
+```{r}
+# Table of descriptive statistics
+precis(xdata)
+```
+
+```{r}
+# Remove kids from dataframe
+kdata <- xdata[xdata$age > 17,]
+precis(kdata)
+```
+
+As a first example, let's take a look at the distribution of the data
+
+```{r}
+#plot the distribution of adult heights
+ggplot(kdata, aes(height)) +
+  geom_density() +
+  labs(x = 'Height (cm)', title='!Kung heights by Nancy Howell') +
+  theme_bw()
+```
+
+We can start our model with a basic (null) model, using a normal distribution to summarize the distribution of adult heights:
+
+$$
+\large{h_i \sim Normal(\mu, \sigma)}
+$$
+
+This describes the likelihood (or data distribution) part of the model, which being normal has two parameters that need priors:
+
+$$
+\large{
+\begin{align*}
+h_i \sim Normal(\mu, \sigma)\\
+\mu \sim Normal(178,20)\\
+\sigma \sim Uniform(0,50)
+\end{align*}
+}
+$$
+
+or again, more succinctly,
+
+$$
+\large{
+\begin{align*}
+h_i \sim N(\mu, \sigma)\\
+\mu \sim N(178,20)\\
+\sigma \sim U(0,50)
+\end{align*}
+}
+$$
+
+We can plot the distribution of these priors to see what they assume:
+
+```{r}
+# plot range of normal prior
+x = seq(100,250, length.out=100)
+plot(x,dnorm(x, mean=178, sd=20), type='l', xlab='μ', ylab='Density', main='μ~N(178,20)')
+
+# plot range of sigma prior
+x = seq(-10,60, length.out=100)
+plot(x,dunif(x, 0, 50), type='l', xlab='σ', ylab='Density', main='σ~U(0, 50)')
+```
+
+So now we have a model - a likelihood and some priors - from which we can simulate, even though we have yet to see any data. To do this, we'll draw 1000 samples from our priors, then fire them into a normal and store the value at each iteration:
+
+```{r}
+# number of samples
+nsamp <- 1000
+
+# grab samples from
+mu_ <- rnorm(nsamp, mean=178, sd=20)
+sigma_ <- runif(nsamp, min=0, max=50)
+h_ <- rnorm(nsamp, mean=mu_, sd=sigma_)
+plot(density(h_), xlab="Height (cm)", main='hi~N(μ,σ) Prior predictive distribution')
+```
+
+What this gives us is some idea about how realistic our results are in terms of the **a priori** allowable height values for adults. Are these reasonable? Well we could add lines to indicate some known information - the tallest ever person ([Robert Wadlow](https://en.wikipedia.org/wiki/Robert_Wadlow)) who topped out at 272 cm:
+
+```{r}
+plot(density(h_), xlab="Height (cm)", main='hi~N( N(178, 20) , U(0, 50)) Prior predictive distribution')
+abline(v=272, col="red")
+text(300, 0.01, "Robert \n Wadlow \n (8'11'')")
+text(300, 0.002, "P(>Wadlow) \n =0.01")
+```
+
+Which amounts to 1.3% percent of our a priori people being taller than the tallest ever person:
+
+```{r}
+sum(h_>272)/length(h_)
+```
+
+What about those wide 'uninformative' priors I've heard so much about? Well, this poses a problem for heights, which by definition can't go below zero. If we use an **N(178,1000)** prior, this is what happens:
+
+```{r}
+# number of samples
+nsamp <- 1000
+
+# grab samples from
+mu_ <- rnorm(nsamp, mean=178, sd=1000)
+sigma_ <- runif(nsamp, min=0, max=50)
+h_ <- rnorm(nsamp, mean=mu_, sd=sigma_)
+plot(density(h_), xlab="Height (cm)", main='hi~N( N(178, 1000) , U(0, 50)) Prior predictive distribution')
+abline(v=272, col="red")
+text(300, 0.0001, "P(>Wadlow) \n =0.5")
+```
+
+```{r}
+sum(h_>272)/length(h_)
+```
+
+So both the mean **and the variance** of our priors matter. We should be skeptical of them, and test their implications before we hit the inference button. Given our original **N(178,20)** prior, let's use the grid approximation for one last time to see what our likelihood surface looks like.
+
+```{r}
+# build grid from 100 to 260, against 4 to 9 in steaps of 1
+pgrid <- expand_grid(mu = 100:260, sigma = 4:9)
+```
+
+```{r}
+# Look at grid
+plot(1, xlim=c(100,260), ylim=c(4,9), ylab="y label", xlab="x lablel")
+grid(nx=160, ny=NULL,  lty = 1, col = "gray", lwd = 2)
+
+```
+
+Let's start with the priors and calculate their likelihoods (confusing name alert), starting with the first two pairs of values on the grid
+
+```{r}
+# Calculate prior likelihood for first pair of values on the grid
+dnorm(pgrid[1,1]$mu, mean=178, sd=20, log=T); dunif(pgrid[1,2]$sigma, min=0, max=50, log=T)
+```
+
+```{r}
+# Calculate prior likelihood for the second pair of values on the grid
+dnorm(pgrid[2,1]$mu, mean=178, sd=20, log=T); dunif(pgrid[2,2]$sigma, min=0, max=50, log=T)
+```
+
+```{r}
+# Calculate prior likelihood for last pair of values on the grid
+dnorm(pgrid[nrow(pgrid),1]$mu, mean=178, sd=20, log=T); dunif(pgrid[nrow(pgrid),2]$sigma, min=0, max=50, log=T)
+```
+
+```{r}
+# sum
+dnorm(pgrid[nrow(pgrid),1]$mu, mean=178, sd=20, log=T) + dunif(pgrid[nrow(pgrid),2]$sigma, min=0, max=50, log=T)
+```
+
+```{r}
+# calculate priors
+prior_loglike <- dnorm(pgrid$mu, mean=178, sd=20, log=T) + dunif(pgrid$sigma, min=0, max=50, log=T)
+prior_loglike
+```
+
+We typically call these values the **prior probability** (likelihood here though, as we haven't standardized), so what do they look like?
+
+```{r}
+# create a grid of prior log likelihood values
+priorgrid = meshgrid(prior_loglike, prior_loglike)
+fig <- plot_ly(z = priorgrid$X)
+fig <- fig %>% add_surface()
+fig
+```
+
+We get a flat top because in the σ dimension we have a uniform distribution; although odd, this is a 'heat' contour, so it's 'red hot' peak is at 178, regardless of the value of σ.
+
+Ok, we have the prior likelihood, now we need the data likelihood - substituting in the grid pair values for the mean and standard deviation for each recorded height. Let's start with the first pair on the grid and the first height value:
+
+```{r}
+kdata$height[1]
+```
+
+```{r}
+dnorm(kdata$height[1], mean=pgrid[1,1]$mu, sd=pgrid[1,2]$sigma, log=T)
+```
+
+```{r}
+# Calculate for first pair of values on the grid
+sum(dnorm(kdata$height, mean=pgrid[1,1]$mu, sd=pgrid[1,2]$sigma, log=T))
+```
+
+```{r}
+# Calculate for last pair of values on the grid
+sum(dnorm(kdata$height, mean=pgrid[966,1]$mu, sd=pgrid[966,2]$sigma, log=T))
+```
+
+```{r}
+# Calculate likelihood (data distribution) for a normal (on the log scale) for each point in the grid.
+log_likelihood <- c()
+for (i in 1:nrow(pgrid)) {
+  ll<- sum(dnorm(kdata$height, mean=pgrid[i,1]$mu, sd=pgrid[i,2]$sigma, log=T))
+  log_likelihood <- c(log_likelihood, ll) 
+}
+log_likelihood
+```
+
+And we can take a look at the **likelihood surface**, which is where frequentist analysis stops
+
+```{r}
+llgrid = meshgrid(log_likelihood, log_likelihood)
+fig <- plot_ly(z = llgrid$X)
+fig <- fig %>% add_surface()
+fig
+```
+
+```{r}
+# Maximum likelihood estimate
+max(log_likelihood)
+```
+
+Now that we have log-scale data likelhood and prior probability values, we can **add** them together to calculate the numerator of Bayes theorem:
+
+$$
+\text{Posterior} = \frac{\text{likelihood x prior}}{\text{normalizing constant}}
+$$
+
+```{r}
+# Un-normalized posterior
+post_num <- log_likelihood + prior_loglike
+```
+
+```{r}
+# Normalized posterior - remember we're doing log-probability calculations here, so don't forget to exponentiate!
+# Also in log-land, the division becomes subtraction, and the normalization is relative to the largest value (for plotting)
+post <- exp(post_num - max(post_num))
+```
+
+```{r}
+postgrid = meshgrid(post, post)
+
+fig <- plot_ly(z = postgrid$X, type='surface') %>% layout(
+  scene = list(
+    xaxis = list(
+      range=c(320,340)
+    )  
+  )
+)
+fig
+```
+
+So this is what's known as the **joint posterior** density for μ and σ, evaluated using grid approximation.
+
+So congratulations - we've calculated the mean and standard deviation of some data, but in a really important way (*i.e.* using Bayes theorem). It's important to keep in mind that while means and variances are things we can easily calculate using math (hence their widespread use), they still constitute a fully Bayesian model for the height data. **Plus** we get uncertainty estimates for μ and σ, which is important.
+
+Next we'll add some complexity to our model - a co-variate of weight - to do what a more typical kind of linear regression. First, let's see what sort of relationship we have between these variables:
+
+```{r}
+plot(kdata$weight, kdata$height, type='p', xlab='Weight (kg)', ylab='Height (cm)')
+```
+
+Ok, looks linear enough. Now let's write out a linear model for this:
+
+$$
+\large{
+\begin{align*}
+h_i &\sim N(\mu_i,\sigma) \\
+\mu_i &= \beta_0 + \beta_1(x_i - \bar{x}) \\
+\beta_0 &\sim N(178,20) \\
+\beta_1 &\sim N(0,10) \\
+\sigma &\sim U(0, 50)
+\end{align*}}
+$$
+
+So, as before, let's simulate and see if we have reasonable priors. This time we are simulating possible lines to describe the relationship between weight and height.
+
+```{r}
+# Number of samples
+nsamp <- 50
+# Intercept - estimated height at popultion average weight
+β0_ <- rnorm(nsamp, 178, 20)
+# Slope - relationship between weight and height
+β1_ <- rnorm(nsamp, 0, 10)
+```
+
+```{r}
+# Grab range of weights to plot over
+meanweight <- mean(kdata$weight)
+weights_ <- seq(min(kdata$weight),max(kdata$weight),length.out=50)-meanweight
+
+plot( NULL , xlim=range(kdata$weight) , ylim=c(-100,400) , xlab="weight" , ylab="height" )
+abline( h=0 , lty=2 ) 
+abline( h=272 , lty=1 , lwd=0.5 ) 
+mtext( "b ~ dnorm(0,10)" ) 
+for ( i in 1:nsamp ) curve( β0_[i] + β1_[i]*(x - meanweight) , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col=col.alpha("black",0.2) )
+```
+
+So we know that people can't be less than zero or more than 272 cm tall, so our model is a priori quite wrong, and we have the opportunity to do a bit better, using our 'domain knowledge' (external information, expertise, common sense etc.) to do a bit better. Given that we know that the relationship between weight and height in people is positive, we can do a bit better. McElreath suggests a log-normal prior because it is by definition constrained to be above zero. Let's try a $log-Normal(0, 1)$ prior and see what happens:
+
+```{r}
+# New slope prior for the relationship between weight and height
+β1_ = rlnorm(nsamp, 0, 1)
+```
+
+```{r}
+# Plot new lines given sample values for β0 and β1
+plot( NULL , xlim=range(kdata$weight) , ylim=c(-100,400) , xlab="weight" , ylab="height" )
+abline( h=0 , lty=2 ) 
+abline( h=272 , lty=1 , lwd=0.5 ) 
+mtext( "b ~ dnorm(0,10)" ) 
+for ( i in 1:nsamp ) curve( β0_[i] + β1_[i]*(x - meanweight) , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col=col.alpha("black",0.2) )
+```
+
+So while there are some extreme values still possible for max heights, the lower values are constrained to be positive, which is much better. Incidentally plotting a hundred or more lines from some distribution is a very Bayesian way to get a look at uncertainty - they tend to illustrate odd cases such as above and are **way** easier to plot than formal uncertainty intervals (credible intervals) around the mean trend line.
+
+With reasonable priors in hand we can now use the quadratic approximation to calculate our posteriors:
+
+```{r}
+plot(kdata$weight-meanweight, kdata$height, type='p', xlab='Weight (kg)', ylab='Height (cm)')
+```
+
+```{r}
+# setup our data for use in the model
+model_data = list(
+  height = kdata$height,
+  weight = kdata$weight,
+  meanweight = meanweight
+)
+
+# sampling using Rethinking and Stan
+kalahari2 <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # Likelihood
+    mu <- b0 + b1*(weight-meanweight),
+    b0 ~ dnorm(178,20),
+    b1 ~ dlnorm(0,1),
+    sigma ~ dunif(0,50)
+  ), data = model_data
+)
+```
+
+```{r}
+posterior <- extract.samples(kalahari2)
+hist(posterior$b0)
+```
+
+```{r}
+# Grab median value from the posterior of average height
+b0_mean = mean(posterior$b0)
+# Grab median value from the posterior of the effect of weight on height
+b1_mean = mean(posterior$b1)
+# Grab median value from the posterior of the variability around the line
+sig_mean = mean(posterior$sigma)
+```
+
+So we have some parameter estimates, lets see how this fits to our data:
+
+```{r}
+plot(kdata$weight, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)')
+curve( b0_mean + b1_mean*(x - meanweight) , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col="black" )
+```
+
+Looks not too bad, how about those uncertainty bounds?
+
+```{r}
+plot(kdata$weight, kdata$height, type='p', col=rangi2, xlab='Weight (kg)', ylab='Height (cm)')
+# mean line
+curve( b0_mean + b1_mean*(x - meanweight) , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col="black" )
+# upper uncertainity bounds
+curve( (b0_mean + b1_mean*(x - meanweight))+sig_mean*2 , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col="black", lty=2 )
+# lower uncertainity bounds
+curve( (b0_mean + b1_mean*(x - meanweight))-sig_mean*2 , from=min(kdata$weight) , to=max(kdata$weight) , add=TRUE , col="black", lty=2 )
+
+```
+
+Et voilà! We have fit our second Bayesian linear regression model (the first that looks like a line). You should feel proud, this is a big foundation on which to build your skilz.
