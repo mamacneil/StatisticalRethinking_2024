@@ -1,0 +1,385 @@
+---
+title: "WK3L1"
+author: "Arun Oakley-Cogan"
+date: "2024-09-18"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+library(ggplot2)
+```
+
+## Waffle Houses
+
+Let's import the Waffle House devorce data:
+
+```{r}
+data("WaffleDivorce")
+wdata <- WaffleDivorce
+
+precis(wdata)
+```
+
+So not unintense data to look at, but let's start with divorce and Waffle Houses
+
+```{r}
+ggplot(data=wdata, aes(WaffleHouses, Divorce)) +
+  geom_point() +
+  geom_smooth(method=lm, se=F) +
+  geom_text(aes(label=Location), size=2, nudge_x = 12, nudge_y = .1) +
+  theme_bw()
+```
+
+Or is divorce rate a product of marriage rate?
+
+```{r}
+ggplot(data=wdata, aes(Marriage, Divorce)) +
+  geom_point() +
+  geom_smooth(method=lm, se=F) +
+  geom_text(aes(label=Location), size=2, nudge_x = .5, nudge_y = .1) +
+  theme_bw()
+```
+
+Or age at marriage?
+
+```{r}
+ggplot(data=wdata, aes(MedianAgeMarriage, Divorce)) +
+  geom_point() +
+  geom_smooth(method=lm, se=F) +
+  geom_text(aes(label=Location), size=2, nudge_x = .2, nudge_y = .1) +
+  theme_bw()
+```
+
+And what does the South have to do with all this? Well with the assertion of a causal model we can take a look and see. For example, if we assert:
+
+A-\>M-\>D A-\>D
+
+Then we can look and see what the affect of marriage rate (M) is on divorce (D), given that we know the median age (A). To do this we need a statistical model to help evaluate this DAG.
+
+$$
+D_i \sim N(\mu_i,\sigma)\\
+\mu_i = \beta_0+\beta_M M_i+\beta_A A_i
+$$
+
+There is nothing magic here - we've all done multiple regression before - but what is new is our causal assertion. Weird, that what we assert and assume changes things eh? But you should get very comfortable with this idea because it turns out it lies at the core of scientific inquiry - as Popper argued, causality is built consenually.
+
+First we should standardize variables:
+
+```{r}
+D <- standardize( wdata$Divorce ) 
+M <- standardize( wdata$Marriage ) 
+A <- standardize( wdata$MedianAgeMarriage )
+State <- wdata$Location
+```
+
+With covariates in hand we can do some prior predictive simulation to see what priors might look like in terms of possible lines:
+
+```{r}
+# Number of samples
+nsamp <- 100
+
+# Intercept
+b0 <- rnorm(nsamp, 0, 0.2)
+# Marriage rate slope
+bM <- rnorm(nsamp, 0, 0.5)
+# Marriage age slope
+bA <- rnorm(nsamp, 0, 0.5)
+```
+
+```{r}
+# Plot lines of priors for Marriage Rate
+plot( NULL , xlim=range(M), ylim=c(-4,4), xlab="Marriage rate (std)", ylab="Divorce rate (std)" )
+for ( i in 1:nsamp ) curve( b0[i] + bM[i]*x, from=min(M), to=max(M), add=TRUE, col=col.alpha("black",0.2))
+
+# Plot lines of priors for Marriage Age
+plot( NULL , xlim=range(A) , ylim=c(-4,4) , xlab="Marriage age (std)" , ylab="Divorce rate (std)")
+for ( i in 1:nsamp ) curve( b0[i] + bA[i]*x, from=min(A) , to=max(A) , add=TRUE , col=col.alpha("black",0.2))
+```
+
+Next, we can build a NUTS model in Stan:
+
+```{r}
+# model data
+model_data <- list(
+  MarriageAge=A,
+  MarriageRate=M,
+  DivorceRate=D,
+  State=State
+)
+
+divorce_model <- ulam(
+  alist(
+    DivorceRate ~ dnorm(mu, sigma), # likelihood
+    mu <- B0 + BA*MarriageAge + BM*MarriageRate, # linear model
+    B0 ~ dnorm(0, 0.2), # B0 prior
+    BA~ dnorm(0, 0.5), # BA prior
+    BM ~ dnorm(0, 0.5), # BM prior
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4
+)
+div_posterior <- extract.samples(divorce_model)
+```
+
+```{r}
+precis(divorce_model)
+```
+
+```{r}
+traceplot(divorce_model)
+```
+
+```{r}
+plot( coeftab(divorce_model), par=c("B0","BA","BM", "sigma") )
+```
+
+```{r}
+marriage_age_model <- ulam(
+  alist(
+    DivorceRate ~ dnorm(mu, sigma), # likelihood
+    mu <- B0 + BA*MarriageAge , # linear model
+    B0 ~ dnorm(0, 0.2), # B0 prior
+    BA~ dnorm(0, 0.5), # BA prior
+    sigma ~ dexp(1)
+  ), data=model_data, chains = 4
+)
+
+marriage_rate_model <- ulam(
+  alist(
+    DivorceRate ~ dnorm(mu, sigma), # likelihood
+    mu <- B0 + BM*MarriageRate , # linear model
+    B0 ~ dnorm(0, 0.2), # B0 prior
+    BM~ dnorm(0, 0.5), # BA prior
+    sigma ~ dexp(1)
+  ), data=model_data,, chains = 4
+)
+
+ma_posterior <- extract.samples(marriage_age_model)
+mr_posterior <- extract.samples(marriage_rate_model)
+```
+
+```{r}
+plot(density(ma_posterior$BA), main="", xlab="Marriage Age", col="blue", xlim=c(-1,0))
+abline(v=0, lty=2)
+
+plot(density(mr_posterior$BM), main="", xlab="Marriage Rate", col="blue", xlim=c(-1,1))
+abline(v=0, lty=2)
+```
+
+```{r}
+plot(density(ma_posterior$BA), main="", xlab="Marriage Age", col="blue", xlim=c(-1,0))
+lines(density(div_posterior$BA), col="red",)
+abline(v=0, lty=2)
+legend("topleft", legend=c("Marriage age (only)", "Marriage age (full)"), col=c("blue", "red"), lty=1)
+
+plot(density(mr_posterior$BM), main="", xlab="Marriage Rate", col="blue", xlim=c(-1,1))
+lines(density(div_posterior$BM),col="red")
+abline(v=0, lty=2)
+legend("topleft", legend=c("Marriage rate (only)", "Marriage rate (full)"), col=c("blue", "red"), lty=1)
+```
+
+# Plotting
+
+Among the most - I'll say **the most** - important checks on your models is to plot the model and the data together. It is critical that you see things the way the model sees things, otherwise it is difficult to know how well you're doing in fitting these things. Three options are:
+
+```         
+1. Predictor residual plots
+2. Posterior prediction plots
+3. Counterfactual plots
+```
+
+Each has their own value and can tell us something about how our model is doing.
+
+## 1. Predictor residual plots
+
+There's an awful legacy in Biology of modelling the residuals of another model. It's awful because it's wrong, and you should never do it. It's wrong because it doesn't get the unceratinties right, prioritizing variation in the first analysis and hiding it in the second. This leads to biased estiamtes, possibly for both models, but certainly for the second. But there is some utility in seeing what information remains in one predictor when you already have information about the other (which is what multiple regression does).
+
+To do this we need to build individual models where we regress one predictor on the other, which will give us the marginal benefit of the other predictor conditional on knowing one of them.
+
+So for the divorce case, we have two models:
+
+```{r}
+m_a <- ulam(
+  alist(
+    MarriageAge ~ dnorm(mu, sigma), # likelihood
+    mu <- B0 + BM*MarriageRate , # linear model
+    B0 ~ dnorm(0, 0.2), # B0 prior
+    BM ~ dnorm(0, 0.5), # BA prior
+    sigma ~ dexp(1)
+  ), data=model_data, chains = 4
+)
+
+a_m <- ulam(
+  alist(
+    MarriageRate ~ dnorm(mu, sigma), # likelihood
+    mu <- B0 + BA*MarriageAge , # linear model
+    B0 ~ dnorm(0, 0.2), # B0 prior
+    BA ~ dnorm(0, 0.5), # BA prior
+    sigma ~ dexp(1)
+  ), data=model_data, chains = 4
+)
+
+a_m_posterior <- extract.samples(a_m)
+m_a_posterior <- extract.samples(m_a)
+```
+
+```{r}
+# Get residuals for the other predictor 
+# first we need to get our posterior predictive distribution (our distribution of mu), we do this with the link function
+trace_m <- link(a_m)
+trace_a <- link(m_a)
+
+m_pred <- apply( trace_m , 2 , mean )
+a_pred <- apply( trace_a , 2 , mean )
+
+residuals_m <- model_data$MarriageRate - m_pred
+residuals_a <- model_data$MarriageAge - a_pred
+
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(MarriageAge ~ MarriageRate,data=model_data, pch=19, col="blue")
+curve(mean(m_a_posterior$B0) + mean(m_a_posterior$BM)*x, from=min(model_data$MarriageRate), to=max(model_data$MarriageRate), add=TRUE, col="blue")
+for(i in 1:50) segments(x0=model_data$MarriageRate[i], y0=model_data$MarriageAge[i], x1=model_data$MarriageRate[i], y1=model_data$MarriageAge[i]-residuals_a[i], col="grey")
+plot(MarriageRate ~ MarriageAge,data=model_data, ylim=c(-2,3), pch=19, col="blue")
+curve(mean(a_m_posterior$B0) + mean(a_m_posterior$BA)*x, from=min(model_data$MarriageAge), to=max(model_data$MarriageAge), add=TRUE, col="blue")
+for(i in 1:50) segments(x0=model_data$MarriageAge[i], y0=model_data$MarriageRate[i], x1=model_data$MarriageAge[i], y1=model_data$MarriageRate[i]-residuals_m[i], col="grey")
+```
+
+What's seemingly bonkers, is that we now have the residuals for each parameter, we can plot them against divorce to see how the **full model** actually sees these things inside their guts:
+
+```{r}
+par(mfrow = c(1, 2))
+plot(residuals_a, model_data$DivorceRate, xlab="Marriage Age residuals (M->A)", ylab="Divorce Rate")
+coef <- polyfit(residuals_a, model_data$DivorceRate, 1)
+for (i in 1:100) curve(div_posterior$B0[i] + div_posterior$BA[i]*x, from=min(model_data$MarriageAge), to=max(model_data$MarriageAge), add=TRUE, col=col.alpha("black",0.05))
+lines(residuals_a, polyval(coef, as.numeric(residuals_a)), col="red", lwd=2)
+curve(mean(div_posterior$B0) + mean(div_posterior$BA)*x, from=-3, to=2, add=TRUE, col="blue", lwd=2)
+legend("topright", legend=c("Local fit", "Model slope"), col=c("red", "blue"), lty=1)
+
+plot(residuals_m, model_data$DivorceRate, xlab="Marriage Rate residuals (A->M)", ylab="Divorce Rate")
+coef <- polyfit(residuals_m, model_data$DivorceRate, 1)
+for (i in 1:100) curve(div_posterior$B0[i] + div_posterior$BM[i]*x, from=min(model_data$MarriageRate), to=max(model_data$MarriageRate), add=TRUE, col=col.alpha("black",0.05))
+lines(residuals_m, polyval(coef, as.numeric(residuals_m)), col="red", lwd=2)
+curve(mean(div_posterior$B0) + mean(div_posterior$BM)*x, from=-3, to=2, add=TRUE, col="blue", lwd=2)
+
+par(mfrow = c(1, 2))
+plot(model_data$MarriageAge, model_data$DivorceRate, xlab="Marriage Age", ylab="Divorce Rate")
+coef <- polyfit(model_data$MarriageAge, model_data$DivorceRate, 1)
+for (i in 1:100) curve(div_posterior$B0[i] + div_posterior$BA[i]*x, from=min(model_data$MarriageRate), to=max(model_data$MarriageRate), add=TRUE, col=col.alpha("black",0.05))
+lines(model_data$MarriageAge, polyval(coef, as.numeric(model_data$MarriageAge)), col="red", lwd=2)
+curve(mean(div_posterior$B0) + mean(div_posterior$BA)*x, from=-3, to=2, add=TRUE, col="blue", lwd=2)
+legend("topright", legend=c("Local fit", "Model slope"), col=c("red", "blue"), lty=1)
+
+plot(model_data$MarriageRate, model_data$DivorceRate, xlab="Marriage Rate", ylab="Divorce Rate")
+coef <- polyfit(model_data$MarriageRate, model_data$DivorceRate, 1)
+for (i in 1:100) curve(div_posterior$B0[i] + div_posterior$BM[i]*x, from=min(model_data$MarriageRate), to=max(model_data$MarriageRate), add=TRUE, col=col.alpha("black",0.05))
+lines(model_data$MarriageRate, polyval(coef, as.numeric(model_data$MarriageRate)), col="red", lwd=2)
+curve(mean(div_posterior$B0) + mean(div_posterior$BM)*x, from=-3, to=2, add=TRUE, col="blue", lwd=2)
+```
+
+So conditional on knowing marriage rate, marriage age still tells us something useful about divorce, but conditional on knowing marriage age, marriage rate tells us very little. Hence the difference in parameter estimates, with marriage age having a way bigger effect size. Incidentally, while we have these residuals, let's take a look at their distribution and what they mean:
+
+```{r}
+par(mfrow = c(1, 2))
+hist(residuals_a, freq = F, xlim=c(-2,4), col="blue", xlab="A Residuals", main="")
+curve(dnorm(x, mean(m_a_posterior$sigma)), add=T, col="orange")
+legend("topright", legend=c("Residuals (A)", "Sigma (A)"), col=c("blue", "orange"), lty=1)
+
+hist(residuals_m, freq = F, xlim=c(-2,4), col="blue", xlab="M Residuals", main="")
+curve(dnorm(x, mean(a_m_posterior$sigma)), add=T, col="orange")
+legend("topright", legend=c("Residuals (M)", "Sigma (M)"), col=c("blue", "orange"), lty=1)
+```
+
+The distribution of the residuals is the error distribution (`Sigma`) for the linear model - i.e. `Sigma` describes the magnitude of the deviations from the regression line.
+
+## 2. Posterior prediction plots
+
+Another important question is - how well is our model capturing the observed data? Are our predictions about each observation any good? Having used MCMC for our inference (and stored the values using a `pm.Determinisitc` node), we can just grab the observed and expected values and plot them:
+
+```{r}
+# posterior predictive plot
+mu <- link( divorce_model ) 
+# summarize samples across cases 
+mu_mean <- apply( mu , 2 , mean ) 
+mu_PI <- apply( mu , 2 , PI ) 
+mu_median<- apply( mu , 2 , median ) 
+# simulate observations
+D_sim <- sim( divorce_model , n=10000 ) 
+D_PI <- apply( D_sim , 2 , PI )
+
+# plot
+plot( mu_mean ~ model_data$DivorceRate , col=rangi2 , ylim=range(mu_PI) , xlab="Observed divorce" , ylab="Predicted divorce" ) 
+abline( a=0 , b=1 , lty=2 ) 
+for ( i in 1:nrow(wdata) ) lines( rep(model_data$DivorceRate[i],2) , mu_PI[,i] , col=rangi2 )
+```
+
+So we can see that our model under predicts high divorce rates (right side) and overpredicts low devorce rates (left side) but that is to be expected, it is a normal model after all an predictions tend to shrink toward the overall average.
+
+But it does look like there are some outlying values, let's label a few
+
+```{r}
+# plot
+plot( mu_mean ~ model_data$DivorceRate , col=rangi2 , ylim=range(mu_PI) , xlab="Observed divorce" , ylab="Predicted divorce" ) 
+abline( a=0 , b=1 , lty=2 ) 
+for ( i in 1:nrow(wdata) ) lines( rep(model_data$DivorceRate[i],2) , mu_PI[,i] , col=rangi2 )
+high_sd = abs(model_data$DivorceRate - mu_median ) > 1.3
+text(model_data$DivorceRate[high_sd], mu_mean[high_sd], model_data$State[high_sd])
+```
+
+## 3. Counterfactual plots
+
+Counterfactuals are frequently brought up in statistical circles, and especially in economics, as a device to imagine what would happen if something else had happened in our data. In the case of counterfactual plots, they show us what happens if we manipulate one variable while keeping the others constant.
+
+If we return to the causal model where median marriage age influences divorce rate both directly and indirectly via marriage rate, we can develop a counterfactual plot by simulating from our `divorce` and `a_m` models above.
+
+```{r}
+divorce_counter_model <- ulam( 
+  alist( 
+    ## A -> D <- M 
+    DivorceRate ~ dnorm( mu , sigma ) , 
+    mu <- B0 + BM*MarriageRate + BA*MarriageAge , 
+    B0 ~ dnorm( 0 , 0.2 ), 
+    BM ~ dnorm( 0 , 0.5 ), 
+    BA ~ dnorm( 0 , 0.5 ), 
+    sigma ~ dexp( 1 ), 
+    ## A -> M 
+    MarriageRate ~ dnorm( mu_M , sigma_M ), 
+    mu_M <- B0M + BAM*MarriageAge, 
+    B0M ~ dnorm( 0 , 0.2 ), 
+    BAM ~ dnorm( 0 , 0.5 ), 
+    sigma_M ~ dexp( 1 ) 
+  ) , data = model_data, chains=4
+)
+```
+
+
+With these values in place, we can see what the predicted change in divorce rate is across the full range of changes in median marriage age. To do this, we first choose the range of marriage ages:
+
+```{r}
+# Marriage age prediction range
+nsim <- 100
+A_new <- seq(from=min(model_data$MarriageAge), to=max(model_data$MarriageAge), length.out=nsim)
+```
+
+Next we calculate the expected effect of marriage age on marriage rate:
+
+```{r}
+# Marriage rates given marriage age range
+# prep data 
+sim_dat <- data.frame( MarriageAge=A_new ) 
+# simulate M and then D, using A_new 
+s <- sim( divorce_counter_model , data=sim_dat , vars=c("MarriageRate","DivorceRate") )
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot( sim_dat$MarriageAge , colMeans(s$MarriageRate) , ylim=c(-2,2) , type="l" , xlab="manipulated A" , ylab="counterfactual M" )
+shade( apply(s$MarriageRate,2,PI), sim_dat$MarriageAge )
+mtext( "Counterfactual effect of A on M" )
+
+plot( sim_dat$MarriageAge , colMeans(s$DivorceRate) , ylim=c(-2,2) , type="l" , xlab="manipulated A" , ylab="counterfactual D" )
+shade( apply(s$DivorceRate,2,PI) , sim_dat$MarriageAge ) 
+mtext( "Total counterfactual effect of A on D" )
+```
