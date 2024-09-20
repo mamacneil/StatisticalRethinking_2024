@@ -72,7 +72,9 @@ drawdag(dag_1)
 This changes our generative model to:
 
 $$
+\large{
 Weight_i = \beta_L Length_i + Unobserved
+}
 $$
 
 ### Define generative model and simulate data
@@ -118,7 +120,7 @@ $$
 \begin{align*}
 Weight_i \sim Normal(mu_i, sigma)\\
 mu_i = alpha + \beta Length_i\\
-Intercept \sim Normal(0,1)\\
+alpha \sim Normal(0,1)\\
 \beta \sim Normal(0,1)\\
 sigma \sim Exp(1)
 \end{align*}}
@@ -139,9 +141,7 @@ for (i in 1:n_samps) curve(alpha_prior[i] + beta_prior[i]*x, from=-2, to=2, add=
 
 These priors are incredible uninformative, they predict both strongly positive and negative relationships. We can do better than this, priors should express scientific knowledge, but do so with some flexibility.
 
-We know that weight increases with length
-
-Both weight & height \> 0
+We know that generally weight increases with length
 
 ```{r}
 alpha_prior <- rnorm(n_samps, mean=0, sd=0.5)
@@ -152,13 +152,15 @@ plot(weight ~ length, data=sim_data, col="deepskyblue4", lwd=2, xlab="Frog lengt
 for (i in 1:n_samps) curve(alpha_prior[i] + beta_prior[i]*x, from=-2, to=2, add=T, col=col.alpha("black",0.2))
 ```
 
+Run statistical model
+
 ```{r}
 length_model <- ulam(
   alist(
     weight ~ dnorm(mu, sigma),
     mu <- alpha + bL*length,
-    alpha ~ dnorm(0, 1),
-    bL ~ dlnorm(0,0.5),
+    alpha ~ dnorm(0,0.5),
+    bL ~ dlnorm(0,0.2),
     sigma ~ dexp(1)
   ), data = sim_data, chains = 4
 )
@@ -168,8 +170,7 @@ precis(length_model)
 
 ### Posterior Predictive plot
 
-Here we check the predictions that are implied by our model against our data. 
-We do this to see if the model correctly approximated the posterior distribution and to gain insights into how the model fails. Most often a model makes good predictions in some observations but not others. We can then go and inspect those individual observations to get an idea of how to improve our model.
+Here we check the predictions that are implied by our model against our data. We do this to see if the model correctly approximated the posterior distribution and to gain insights into how the model fails. Most often a model makes good predictions in some observations but not others. We can then go and inspect those individual observations to get an idea of how to improve our model.
 
 ```{r}
 # compute the mean predicted by the model over the range of our data
@@ -182,7 +183,7 @@ abline( a=0 , b=1 , lty=2 )
 for ( i in 1:75 ) lines( rep(sim_data$weight[i],2) , mu_PI[,i] , col="deepskyblue4" )
 ```
 
-### Plot out final linear regression, 
+### Plot out final linear regression,
 
 ```{r}
 # extract samples
@@ -202,22 +203,24 @@ shade(mu_PI, lengths_seq)
 
 ```
 
-## Multiple Linear Regression: Adding another covariate and spurrious correlations
+## Multiple Linear Regression: Adding another covariate and spurious correlations
 
 Let us add another covariate into our casual model. We are going to make this pretty far fetched to emphasize the points made in lecture of spurious correlation. Let's add colour into the mix!
 
 ```{r}
 # causual model
-dag_1 <- dagitty( "dag{ Length -> Weight Unobserved -> Weight Length -> Colour Colour -> Weight Unobserved -> Colour}" )
-coordinates(dag_1) <- list(x=c(Length=0, Weight=1, Unobserved=2, Colour=2), y=c(Length=2, Weight=1, Unobserved=0, Colour=2))
-drawdag(dag_1)
+dag_2 <- dagitty( "dag{ Length -> Weight Unobserved -> Weight Length -> Colour Colour -> Weight Unobserved -> Colour}" )
+coordinates(dag_2) <- list(x=c(Length=0, Weight=1, Unobserved=2, Colour=2), y=c(Length=2, Weight=1, Unobserved=0, Colour=2))
+drawdag(dag_2)
 ```
 
 My causal assumptions stated in this model are
 
-Length -> Weight: As a frog gets longer it gets heavier.
-Length -> Colour: As a frog gets longer its colour changes.
-Colour -> Weight: As a frog changes colour it also causes changes to weight.
+Length -\> Weight: As a frog gets longer it gets heavier.
+
+Length -\> Colour: As a frog gets longer its colour changes.
+
+Colour -\> Weight: As a frog changes colour it also causes changes to weight ???
 
 The functional implications of this casual model are:
 
@@ -248,10 +251,13 @@ plot(sim_data$colour ~ sim_data$length, col="deepskyblue4", lwd=2, xlab="Frog le
 
 # our original 
 plot(sim_data$weight ~ sim_data$length, col="deepskyblue4", lwd=2, xlab="Frog length (mm)", ylab="Frog weight (g)")
+```
 
+```{r}
 # here is the kicker, the relationship between weight and colour - even though we have never simulated any data between the two
 plot(sim_data$weight ~ sim_data$colour, col="deepskyblue4", lwd=2, xlab="Frog colours groups", ylab="Frog weight (g)")
 ```
+
 ```{r}
 colour_model <- ulam(
   alist(
@@ -292,7 +298,6 @@ shade(mu_PI, colours_seq)
 
 ```
 
-
 ### Build our statistical model
 
 $$
@@ -305,20 +310,21 @@ alpha \sim Normal(0,0.5)\\
 \beta_C \sim Normal(0,0.2)\\
 sigma \sim Exp(1)
 \end{align*}}
-$$
-#### Prior predictive simulation
+$$ \#### Prior predictive simulation
 
 ```{r}
-# simulate from our priors for t
+# simulate from our priors
 n_samps <- 100
 alpha_prior <- rnorm(n_samps, mean=0, sd=1)
-beta_C_prior <- rlnorm(n_samps, mean=0, sd=0.7)
-beta_L_prior <- rlnorm(n_samps, mean=0, sd=0.7)
+beta_C_prior <- rlnorm(n_samps, mean=0, sd=0.8)
+beta_L_prior <- rlnorm(n_samps, mean=0, sd=0.8)
 # plot 
 plot(weight ~ colour, data=sim_data, col="deepskyblue4", lwd=2, xlab="Frog colours", ylab="Frog weight std (g)")
 for (i in 1:n_samps) curve(alpha_prior[i] + beta_C_prior[i]*x + beta_L_prior[i]*x, from=-3, to=3, add=T, col=col.alpha("black",0.2))
 ```
+
 Run our multiple regression
+
 ```{r}
 # multiple regression
 length_colour_model <- ulam(
@@ -326,17 +332,19 @@ length_colour_model <- ulam(
     weight ~ dnorm(mu, sigma),
     mu <- alpha + bL*length + bC*colour,
     alpha ~ dnorm(0,1),
-    bL ~ dnorm(0,.7),
-    bC ~ dnorm(0,.7),
+    bL ~ dnorm(0,.8),
+    bC ~ dnorm(0,.8),
     sigma ~ dexp(1)
   ), data=sim_data, chains=4
 )
 ```
 
 Using coeftab we can plot what each parameter estimate is foreach model
+
 ```{r}
 plot( coeftab(colour_model, length_model, length_colour_model), par=c("alpha","bL","bC", "sigma") )
 ```
+
 ```{r}
 # posterior prediction plot 
 # compute the mean predicted by the model over the range of our data
