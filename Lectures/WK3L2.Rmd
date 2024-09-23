@@ -1,0 +1,433 @@
+---
+title: "W3L2"
+author: "Arun Oakley-Cogan"
+date: "2024-09-23"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+library(dagitty)
+```
+
+## Categorical variables
+
+When N things are factors we often use dummy variables (0,1)'s to represent n-1 of them against a 'baseline' category. This is very standard practice, something I have done for years. However there are problems, because the baseline category has priority over the other variables in that by setting a baseline, we are *a priori* stating that we know more about the baseline category than the other categories. In some cases this may be true - I have typically used the category for which we have the most inoformation as the baseline - but it can also get cumbersome, as we need to assert a prior for each category.
+
+Instead, let's use an **index variable**, which will make things much simpler. First import the !Kung data:
+
+```{r}
+data("Howell1")
+kdata <- Howell1
+kdata$sex <- ifelse( kdata$male==1 , 2 , 1 )
+head(kdata)
+```
+
+Next let's run two models, one using the dummy variable, and a second using the index variable:
+
+```{r}
+dummy_model <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha + betaM*male, # linear model, here if male == 0, we are left with mu = alpha, the average height of females, but if male == 1, we turn on the effect of males, then betaM becomes the difference between males and females in height
+    alpha ~ dnorm(178, 20), # female prior
+    betaM ~ dnorm(0,1), # prior difference between males and females
+    sigma ~ dexp(1)
+  ), data=kdata, chains = 4
+)
+precis(dummy_model)
+```
+
+```{r}
+index_model <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha[sex], # linear model
+    alpha[sex] ~ dnorm(178, 20), # female + male prior
+    sigma ~ dexp(1)
+  ), data=kdata, chains = 4
+)
+precis(index_model, depth=2)
+```
+
+```{r}
+dummy_posterior <- extract.samples(dummy_model)
+index_posterior <- extract.samples(index_model)
+
+```
+
+```{r}
+par(mfrow=c(1,2))
+# female posteriors
+plot(density(dummy_posterior$alpha), xlab="Posterior", lwd=2, ylab="Density", col="deepskyblue4", main="Female")
+lines(density(index_posterior$alpha[,1]), lwd=2, col="orange")
+abline(v=mean(kdata$height[kdata$male == 0]), lwd=2, col="deepskyblue4")
+legend("topright", legend=c("Dummy", "Indexed"), lwd=2, col=c("deepskyblue4", "orange"), lty=1, cex=0.7)
+# male posteriors
+plot(density(dummy_posterior$alpha + dummy_posterior$betaM), xlab="Posterior", lwd=2, ylab="Density", col="deepskyblue4", main="Male")
+lines(density(index_posterior$alpha[,2]), lwd=2, col="orange")
+abline(v=mean(kdata$height[kdata$male == 1]), lwd=2, col="deepskyblue4")
+legend("topright", legend=c("Dummy", "Indexed"), lwd=2, col=c("deepskyblue4", "orange"), lty=1, cex=0.7)
+```
+
+So what has happened here? Well it turns out the $N(0,1)$ prior for males in the dummy version was too informative. So if we go for something wider:
+
+```{r}
+dummy_model <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha + betaM*male, # linear model,
+    alpha ~ dnorm(178, 20), # female prior
+    betaM ~ dnorm(0,5), # prior difference between males and females
+    sigma ~ dexp(1)
+  ), data=kdata, chains = 4
+)
+precis(dummy_model)
+```
+
+```{r}
+# resample posterior from dummy model
+dummy_posterior <- extract.samples(dummy_model)
+
+par(mfrow=c(1,2))
+# female posteriors
+plot(density(dummy_posterior$alpha), xlab="Posterior", lwd=2, ylab="Density", col="deepskyblue4", main="Female")
+lines(density(index_posterior$alpha[,1]), lwd=2, col="orange")
+abline(v=mean(kdata$height[kdata$male == 0]), lwd=2, col="deepskyblue4")
+legend("topright", legend=c("Dummy", "Indexed"), lwd=2, col=c("deepskyblue4", "orange"), lty=1, cex=0.7)
+# male posteriors
+plot(density(dummy_posterior$alpha + dummy_posterior$betaM), xlab="Posterior", lwd=2, ylab="Density", col="deepskyblue4", main="Male")
+lines(density(index_posterior$alpha[,2]), lwd=2, col="orange")
+abline(v=mean(kdata$height[kdata$male == 1]), lwd=2, col="deepskyblue4")
+legend("topright", legend=c("Dummy", "Indexed"), lwd=2, col=c("deepskyblue4", "orange"), lty=1, cex=0.7)
+```
+
+So either version can get us to a simliar place, however the indexed version tends to be far easier to work with.
+
+# Selection distortion effects
+
+Among the scariest aspects of statistical models is that things can become spurriously correlated due to the inclusion or exclusion of another, lurking variable. If we don't know about this, and how such things can be induced, we're doomed to report stuff that is complete malarky, adding noise to the scientific cannon. I'm sure I've done this at some point. But knowing is half the battle, so let's start with something called the selection-distortion effect. This is when a third, intervening variable is added that selects for a subset of the data and induces a spurroius correlation. This is something that is known as collider bias (we'll explain below), and it can be a big problem.
+
+To illustrate, we can take a look at the simulated scientific distortion example on p162 in the book:
+
+```{r}
+
+N <- 200 # num grant proposals 
+p <- 0.1 # proportion to select 
+
+# uncorrelated newsworthiness and trustworthiness 
+nw <- rnorm(N) 
+tw <- rnorm(N) 
+# select top 10% of combined scores 
+s <- nw + tw # total score 
+q <- quantile( s , 1-p ) # top 10% threshold 
+selected <- ifelse( s >= q , TRUE , FALSE ) 
+cor( tw[selected] , nw[selected] )
+```
+
+```{r}
+plot(nw, tw, col="deepskyblue4", lwd=2, xlab="Newsworthiness", ylab="Trustworthiness")
+points(nw[selected], tw[selected], col="red", lwd=3)
+```
+
+In most simulations, the red dots will have a negative correlation, entirely due to their having the highest total value for the two covariates. Provided we don't condition on score, this isn't a problem. If we did, we would induce a spurrious correlation that doesn't apply to the data as a whole. Tricky eh?
+
+# DAGs and why to use 'em
+
+Directed Acyclic Graphs are a really important development in modelling observational data (if you've done an experiment, then all power to you), because they give us some sort of ground to stand on in thinking about causality. Again, much of this creit goes to [Judea Pearl](https://en.wikipedia.org/wiki/Judea_Pearl), whose thinking around causality is nobel-prize worthy.
+
+Pearl set out 4 key rules, that cover all the major bases. If you address these four things once you've made a causal model, causal inference can follow.
+
+## The fork and the pipe
+
+The fork and the pipe are equivalent mathematically, in that they are about conditing on an intermediating variable, but for the fork to break a spurrious correlation, and in the not conditioning to estimate an effect. We saw a fork example in the Southern divorce example, with a fork at marriage age (A) that, once conditioned on, breaks the association between marriage rate (M) and divorce (D).
+
+For a pipe example, we can simulate some data relating to treatment effects on plants. The pipe is that the treatment (T) reduces fungus (F) and therfore aids in the growth of a plant (G).
+
+```{r}
+# Set number of plants
+N <- 100
+
+# Simulate initial heights
+h0 <- rnorm(N, 10, 2)
+
+# Assign treatments
+treatment = sample(c(0,1), size=N, replace=T)
+
+# Simulate fungus conditional on treatment
+beta_t = 0.4
+fungus = rbinom(N, 1, 0.5-beta_t*treatment)
+
+# Generate end heights
+h1 = h0+rnorm(N,5-3*fungus,1)
+
+# plot
+hist1 <- hist(h1[treatment==0])
+hist2 <- hist(h1[treatment==1])
+plot(hist1, col=col.alpha("deepskyblue", .75),  main="", xlab="Height")
+plot(hist2,col=col.alpha("orange", .25), add=T)
+legend("topright", legend=c("Control", "treatment"), lwd=2, col=c("deepskyblue", "orange"), lty=1, cex=0.7)
+```
+You can see from what we've simulated that things are bimodial according to if the plants received the treatment or not. So, we have covariates for `initial height`, `treatment`, and `fungus` - to the multiple regression!
+
+```{r}
+# multiple regression
+# model data
+sim_data <- list(
+  h1 = h1,
+  h0 = h0,
+  treatment = treatment,
+  fungus = fungus
+)
+
+plants_model <- ulam(
+  alist(
+    h1 ~ dnorm(mu, sigma),
+    mu <- (alpha + bT*treatment + bF*fungus)*h0,
+    alpha ~ dlnorm(0,.2),
+    bT ~ dnorm(0,.5),
+    bF ~ dnorm(0,.5),
+    sigma ~ dexp(1)
+  ), data=sim_data, chains=4
+)
+precis(plants_model)
+```
+```{r}
+plot(coeftab(plants_model), par=c("alpha", "bT", "bF", "sigma"))
+```
+What the heck? We know the treatment will reduce the probability of fungus by 0.4, and that fungal-infested plants will grow an average of 3cm less (we made the data). So what's going on? Well, conditional on knowing that there is fungus, there is no benefit to knowing about the treatement, whereas conditional on knowing treatment it remains worth knowing if there is fungus (fungus happens to treated plants too). In this case fungus lies along the pipe between treatment and outcome, blocking information that would flow from treatment. Therefore if we want to estimate the effect of treatment we need a model without the post-treatment outcome, fungus:
+
+```{r}
+plants_t_model <- ulam(
+  alist(
+    h1 ~ dnorm(mu, sigma),
+    mu <- (alpha + bT*treatment)*h0,
+    alpha ~ dlnorm(0,.2),
+    bT ~ dnorm(0,.5),
+    sigma ~ dexp(1)
+  ), data=sim_data, chains=4
+)
+precis(plants_t_model)
+```
+
+```{r}
+plot(coeftab(plants_t_model), par=c("alpha", "bT", "sigma"))
+abline(v=beta_t, col="red")
+```
+But now our effect is 0.15 (or so), not 0.4 - what's going on? Well, our known treatment effect of 0.4 is the reduction in the probability of fungus, while our treatment estimate above is on the effect of treatment on height. So we need to convert back to the probability scale, or convert our known number to the height effect scale. 
+
+```{r}
+diff <- h1 - h0
+avg_diff <- mean(diff[fungus==0]) - mean(diff[fungus==1])
+avg_diff
+```
+```{r}
+plants_t_posterior <- extract.samples(plants_t_model)
+hist(plants_t_posterior$bT*avg_diff, main="", xlab="p(fungus|delta_height)")
+abline(v=beta_t, col="red")
+```
+#Collider bias
+McElreath has an agent-based model of happiness baked into his rethinking package, as outlined on p177, with five key conditions
+1. Each year, 20 people are born with uniformly distributed happiness values.
+2. Each year, each person ages one year. Happiness does not change.
+3. At age 18, individuals can become married. The odds of marriage each year are proportional to a person's happiness.
+4. Once married, individuals remain married.
+5. After age 65, individuals leave the sample (They move to Spain.)
+We can import that simulated happiness data to work with it:
+
+```{r}
+hdata = read.csv('../Data/happiness1.csv')
+head(hdata)
+```
+```{r}
+plot(hdata$age[hdata$married==0], hdata$happiness[hdata$married==0], xlab="Age", ylab="Happiness", pch=21, lwd=2)
+points(hdata$age[hdata$married==1], hdata$happiness[hdata$married==1],  pch=21, bg="deepskyblue", lwd=2)
+legend("topleft", legend=c("Unmarried", "Married"), lwd=2, pt.bg=c("white", "deepskyblue"), pch=21)
+```
+
+The data above assumes happiness is uniformally distributed and never changes. 
+
+So, pretending we don't know anything about how this was generated, what sort of model should we build? 'Is age related to happiness' we might ask. And we should control for the effect of marriage, right?? A model representing these things would be
+
+$$
+\mu_i = \beta_{M[i]}+\beta_{A}A_i
+$$
+
+with indexed married/not-married intercepts ($\beta_{M[i]}$) and a parameter for changing happieness with age ($\beta_{A}$). 
+
+What makes for sensible priors sensible here? It's difficult to think about how much happiness should increase or decrease per year of age. First we can chuck out the kids, as they can't marry. Then if we scale the ages from 18 to 65 to be over the range 1 to 0, we know the range for happiness is -2 to 2, so we should be cover that range (i.e. 4 units) over the 0 to 1 interval of scaled ages. As 95% of the posterior mass is within 2SD of the mean, setting the prior SD to 4/2 will capture most of the range.
+
+For the intercept, now equal to 0 at age 18, we can also span the range, using a $N(0,1)$ prior.
+
+
+In Stan this would be:
+
+```{r}
+
+happy_data <- list(
+  H = hdata$happiness[hdata$age > 17], # adults only
+  Age = (hdata$age[hdata$age>17]-18)/(65-18), #s caled so to be 0-1
+  M_indx = hdata$married[hdata$age>17] + 1
+)
+
+happy_model <- ulam(
+  alist(
+    H ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha[M_indx] + betaA*Age, # linear model
+    alpha[M_indx] ~ dnorm(0,1), # intercept prior
+    betaA ~ dnorm(0,2), # age effect prior
+    sigma ~ dexp(1)
+  ), data=happy_data, chains=4
+)
+precis(happy_model, depth=2)
+```
+```{r}
+plot(coeftab(happy_model), par=c("alpha[1]","alpha[2]", "betaA", "sigma"))
+```
+Waaait a minute - we know that happiness is consistent across ages (everyone keeps their intial happiness levels in the simulation), so what the heck is the model doing? It is refelcting the model it was given, one where marriage acts as a collider to open a path between age and happiness. How does this occur? Well it occurs because marriage is a common consequence of both age and happiness - people who are older and happier are more likely to be married. Take a look again at the data: 
+
+```{r}
+plot(hdata$age[hdata$married==0], hdata$happiness[hdata$married==0], xlab="Age", ylab="Happiness", pch=21, lwd=2)
+points(hdata$age[hdata$married==1], hdata$happiness[hdata$married==1],  pch=21, bg="deepskyblue", lwd=2)
+legend("topleft", legend=c("Unmarried", "Married"), lwd=2, pt.bg=c("white", "deepskyblue"), pch=21)
+```
+And you can see it - the older, happier people tend to be married. The collider. If instead of including it, we leave the collider path closed, we get the right result:
+
+```{r}
+happy2_model <- ulam(
+  alist(
+    H ~ dnorm(mu, sigma), # data likelihood
+    mu <- betaA*Age, # linear model
+    betaA ~ dnorm(0,2), # age effect prior
+    sigma ~ dexp(1)
+  ), data=happy_data, chains=4
+)
+precis(happy2_model)
+```
+```{r}
+plot(coeftab(happy2_model), par=c("betaA", "sigma"))
+```
+# The Haunted DAG
+
+Of all the many difficulties lurking in our statistical models, perhaps the scariest is that our estimates are influcenced by something we haven't measured, or even thought of. How can we deal with that? First let's look at the grandparents example. Here we are looking at the influence of both parent (P) and grandparent (G) education on children's education (C). The DAG for this is simple in the sense that $G\rightarrow P \rightarrow C$ (grandparents influence their kids, who influence their kids) AND $G\rightarrow C$ (grandparents influence their grandkids directly). 
+
+```{r}
+dag <- dagitty( "dag{ G -> P P -> C G -> C}" )
+coordinates(dag) <- list(x=c(G=0, P=1, C=1), y=c(G=1, P=1, C=2))
+drawdag(dag)
+```
+
+
+But what if we have a third, lurking variable $U$, that is a common influence on both parents and children? This could be something like the neighbourhood that the parents and kids live in, and by conditioning on the parents, we open up a backdoor path from $G$ to $C$ (via $U$)
+
+```{r}
+dag <- dagitty( "dag{ G -> P P -> C G -> C U->P U->C}" )
+coordinates(dag) <- list(x=c(G=0, P=1, C=1, U=2), y=c(G=0, P=0, C=2, U=1))
+drawdag(dag)
+```
+
+What's messed up about this is that this can happen without our even knowing about $U$ or having ever observed it. Here's a simulation of how it works:
+
+```{r}
+# Number of families
+N <- 200
+
+# Direct effect of G on P
+b_GP <- 1
+
+# Direct effect of G on C
+b_GC <- 0
+
+# Direct effect of P on C
+b_PC <- 1
+
+# Direct effect of U on P and C
+b_U <- 2
+```
+With these parameter estimates we can simulate from some random normals:
+
+```{r}
+# Simulate neighborhood effects - some are positive (+1*U) some are negative (-1*U)
+U = 2*rbinom(N,1, 0.5) - 1
+
+# Simulate standard normal grandparents
+G = rnorm(N,0,1)
+
+# Simulate Parents, conditional on their influeces (G and U)
+P = rnorm(N,b_GP*G+b_U*U,1)
+
+# Simulate Children, conditional on their influeces (G, P, and U)
+C = rnorm(N,b_PC*P+b_GC*G+b_U*U,1)
+```
+
+Naively running a regression model with parents and grandparents included, we get:
+
+```{r}
+edu_data <- list(
+  U=U,
+  G=G,
+  P=P,
+  C=C
+)
+edu_model <- ulam(
+  alist(
+    C ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha + betaG*G + betaP*P, # linear model
+    alpha ~ dnorm(0,1), # intercept prior
+    betaG ~ dnorm(0,1), # grandparent prior
+    betaP ~ dnorm(0,1), # parent prior
+    sigma ~ dexp(1)
+  ), data=edu_data, chains=4
+)
+precis(edu_model)
+```
+```{r}
+plot(coeftab(edu_model), par=c("alpha", "betaG", "betaP", "sigma"))
+```
+So without knowing about the neighbourhood effect  , it seems like grandparents are messing up their grandkids!
+From the DAG it's clear that conditioning on P opens up a backdoor path for grandparents to influence their grandkids indirectly through their kids choice of neighbourhood.
+To see this mechanically, take a look at the following figure:
+
+```{r}
+plot(G[U==1], standardize(C)[U==1], xlab="Grandparent Education (G)", ylab="Child education (C)", pch=21, lwd=2, ylim=c(-2, 2))
+points(G[U==-1], standardize(C)[U==-1],  pch=1, col="deepskyblue", lwd=2)
+legend("topleft", legend=c("N1", "N2"), lwd=2, pt.bg=c("white"), pch=c(21,1), col=c("black", "deepskyblue"))
+```
+First notice the positive relationship between G and C, even though the direct effect is 0 - how? Well $G\rightarrow P = 1$ and $P\rightarrow C = 1$ so there is a pipe from $G\rightarrow C$ evident in the plot. Now look what happens when we condition on parents - remember that this is a form of selection? - and highlight those parents who happen to lie between the 45th and 60th percentiles of education.
+
+```{r}
+# get parents that lie between .45 and .6 percentile range for both good and bad neighbourhoods
+pflag_1 = 1*(P[U==1]>quantile(P, .45))*(P[U==1]<quantile(P, .60))
+pflag_2 = 1*(P[U==-1]>quantile(P, .45))*(P[U==-1]<quantile(P, .60))
+
+plot(G[U==1], standardize(C)[U==1], xlab="Grandparent Education (G)", ylab="Child education (C)", pch=21, lwd=2, ylim=c(-2, 2))
+points(G[U==-1], standardize(C)[U==-1],  pch=1, col="deepskyblue", lwd=2)
+points(G[U==1][pflag_1==1], standardize(C)[U==1][pflag_1==1], pch=21, bg="orange", lwd=2, )
+points(G[U==-1][pflag_2==1], standardize(C)[U==-1][pflag_2==1],  pch=21, bg="orange", lwd=2)
+legend("topleft", legend=c("N1", "N2", "N1|Pmid", "N2|Pmid"), lwd=2, pt.bg=c("white", "white", "orange", "orange"), pch=c(21,21,21,21), col=c("black", "deepskyblue", "black", "black"))
+```
+And there it is, hidden among the data - by conditioning on P, a negative association has been induced between grandparents and children that has entirely to do with the fact that the unmeasured neighbourhood effect is operating in the background, drawing down child scores in a hidden way. Spooky!
+
+So what should we do about all this? Well if we had accounted for U:
+
+```{r}
+edu_new_model <- ulam(
+  alist(
+    C ~ dnorm(mu, sigma), # data likelihood
+    mu <- alpha + betaG*G + betaP*P + betaU*U, # linear model
+    alpha ~ dnorm(0,1), # intercept prior
+    betaG ~ dnorm(0,1), # grandparent prior
+    betaP ~ dnorm(0,1), # parent prior
+    betaU ~ dnorm(0,1), # Neighborhood prior
+    sigma ~ dexp(1)
+  ), data=edu_data, chains=4
+)
+precis(edu_new_model)
+```
+```{r}
+plot(coeftab(edu_new_model), par=c("alpha", "betaG", "betaP","betaU", "sigma"))
+
+```
+It gets it right. But this is kind of unsatisfactory, as we didn't know there was a problem, U stands for unmeasured after all.
+
+For now, we'll remain haunted...
