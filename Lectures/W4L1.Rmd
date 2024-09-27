@@ -1,0 +1,94 @@
+---
+title: "W4L1 - Backdoor paths"
+author: "Arun Oakley-Cogan"
+date: "2024-09-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rethinking)
+```
+
+## Return to Waffle Houses
+
+From the waffle house data we can assert a full causal graph:
+
+```{r}
+waffle_dag <- dagitty( "dag { Age -> Divorce Age -> MarriageRate -> Divorce Age <- South -> MarriageRate South -> Waffle -> Divorce }")
+coordinates(waffle_dag) <- list( x=c(Age=0,South=0,MarriageRate=1,Waffle=2,Divorce=2) , y=c(Age=1,South=0,MarriageRate=.5,Waffle=0,Divorce=1) )
+drawdag( waffle_dag )
+```
+
+And by importing the data, we can check the implications of our assumptions, and how playing with the elemental confounds changes the effect sizes we see in our statistical model.
+
+```{r}
+data("WaffleDivorce")
+wdata = list(
+  Age = standardize(WaffleDivorce$MedianAgeMarriage),
+  Rate = standardize(WaffleDivorce$Marriage),
+  PropSlaves = standardize(WaffleDivorce$PropSlaves1860),
+  Divorce = standardize(WaffleDivorce$Divorce),
+  Wafflehouses = standardize(WaffleDivorce$WaffleHouses),
+  South = standardize(WaffleDivorce$South)
+)
+
+```
+
+```         
+With this diagram and data, let's see how blocking the backdor through conditioning on South versus Age and MarriageRate changes the effect of Wafflehouses on Divorce.
+```
+
+```{r}
+south_model <- ulam(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- alpha + bW*Wafflehouses + bS*South,
+    alpha ~ dnorm(0, 0.2),
+    bW ~ dnorm(0, 0.5),
+    bS ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data=wdata, chains=4
+)
+
+age_rate_model <- ulam(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- alpha + bW*Wafflehouses + bA*Age + bM*Rate,
+    alpha ~ dnorm(0, 0.2),
+    bW ~ dnorm(0, 0.5),
+    bA ~ dnorm(0, 0.5),
+    bM ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data=wdata, chains=4
+)
+
+age_model <- ulam(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- alpha + bW*Wafflehouses + bA*Age,
+    alpha ~ dnorm(0, 0.2),
+    bW ~ dnorm(0, 0.5),
+    bA ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data=wdata, chains=4
+)
+
+rate_model <- ulam(
+  alist(
+    Divorce ~ dnorm(mu, sigma),
+    mu <- alpha + bW*Wafflehouses + bM*Rate,
+    alpha ~ dnorm(0, 0.2),
+    bW ~ dnorm(0, 0.5),
+    bM ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data=wdata, chains=4
+)
+```
+
+```{r}
+plot(coeftab(age_model, age_rate_model, rate_model, south_model), pars=c('bW', 'bS', 'bM', 'bA'))
+```
+
+```         
+Humm, we can see that South negates the Waffle House effect as expected, however conditioning on M and A doesn't do the same thing...there must be other, unmeasured backdoor paths through W to have an effect. 
+```
