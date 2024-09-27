@@ -57,15 +57,17 @@ drawdag(fork_dag)
 ```{r}
 # implied independencies of dag
 impliedConditionalIndependencies(fork_dag)
+
 # what do i need to adjust for to infer a total causal effect
-adjustmentSets(fork_dag, exposure="Weight", outcome = "Colour")
+adjustmentSets(fork_dag, outcome = "Weight", exposure="Colour", effect="total")
 ```
 
 What does conditional on mean?. In other statistical terminology it also means ‘adjust for’, for us this mean we need to include this variable in our model, and essentially ignore its effect as we are only care about the effect of ONE variable on another.
 
 ```{r}
+# number of frogs
 n_frog <- 75
-#lengths <- runif(n_frog, min=65, max=145)
+# generate some lengths
 lengths <- rnorm(n_frog, 0,1)
 # Length -> Weight
 weights <- sim_weight(lengths, 1, 1)
@@ -78,28 +80,29 @@ frog_data <- list(
   colours=colours
 )
 
-# no adjustment
+# test for independence
 fork_model <- ulam(
   alist(
     weights ~ dnorm(mu, sigma),
-    mu <- alpha + bC*colours,
-    alpha ~ dnorm(0,1),
-    bC ~ dnorm(0,1),
+    mu <- alpha + bC*colours + bL*lengths,
+    alpha ~ dnorm(0,.2),
+    bC ~ dnorm(0, 1),
+    bL ~ dnorm(0,.5),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
 )
 plot(coeftab(fork_model))
+
 ```
 
 ```{r}
-# with adjustment
+# Do not include length
 fork_model2 <- ulam(
   alist(
     weights ~ dnorm(mu, sigma),
-    mu <- alpha + bC*colours + bL*lengths,
-    alpha ~ dnorm(0,1),
-    bC ~ dnorm(0,1),
-    bL ~ dnorm(0,1),
+    mu <- alpha + bC*colours,
+    alpha ~ dnorm(0,.2),
+    bC ~ dnorm(0, 1),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
 )
@@ -123,8 +126,6 @@ drawdag(pipe_dag)
 ```{r}
 # implied idependencies of dag
 impliedConditionalIndependencies(pipe_dag)
-# what do i need to adjust for to infer a total causal effect
-adjustmentSets(pipe_dag, exposure="Colour", outcome = "Reproduction")
 ```
 
 ```{r}
@@ -139,10 +140,10 @@ pipe_model <- ulam(
   alist(
     reproduction ~ dnorm(mu, sigma),
     mu <- alpha + bC*colours + bL*lengths + bW*weights,
-    alpha ~ dnorm(0,1),
+    alpha ~ dnorm(0, 0.2),
     bC ~ dnorm(0,1),
-    bL ~ dnorm(0,1),
-    bW ~ dnorm(0,1),
+    bL ~ dnorm(0, 0.8),
+    bW ~ dnorm(0, 0.5),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
 )
@@ -151,12 +152,19 @@ plot(coeftab(pipe_model))
 ```
 
 ```{r}
+# what do i need to adjust for to infer a total causal effect
+adjustmentSets(pipe_dag, exposure="Colour", outcome = "Reproduction", effect="total")
+```
+
+```{r}
+
+
 # pipe without adjustment
 pipe_model_no_adjustment <- ulam(
   alist(
     reproduction ~ dnorm(mu, sigma),
     mu <- alpha + bC*colours,
-    alpha ~ dnorm(0,1),
+    alpha ~ dnorm(0,0.2),
     bC ~ dnorm(0,1),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
@@ -166,9 +174,9 @@ pipe_model_w_adjustment <- ulam(
   alist(
     reproduction ~ dnorm(mu, sigma),
     mu <- alpha + bC*colours + bL*lengths,
-    alpha ~ dnorm(0,1),
+    alpha ~ dnorm(0,0.2),
     bC ~ dnorm(0,1),
-    bL ~ dnorm(0,1),
+    bL ~ dnorm(0,0.5),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
 )
@@ -205,10 +213,10 @@ predation_model <- ulam(
   alist(
     predation ~ dnorm(mu, sigma),
     mu <- alpha + bC*colours + bL*lengths + bW*weights,
-    alpha ~ dnorm(0,1),
+    alpha ~ dnorm(0,0.2),
     bC ~ dnorm(0,1),
-    bL ~ dnorm(0,1),
-    bW ~ dnorm(0,1),
+    bL ~ dnorm(0,0.2),
+    bW ~ dnorm(0,0.5),
     sigma ~ dexp(1)
   ), data=frog_data, chains=4
 )
