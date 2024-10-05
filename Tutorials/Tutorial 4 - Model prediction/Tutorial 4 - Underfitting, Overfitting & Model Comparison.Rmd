@@ -1,0 +1,306 @@
+---
+title: "Tutorial 4 - Underfitting, Overfitting, Predictive Accuracy and Model Comparison"
+author: "Arun Oakley-Cogan"
+date: "2024-10-02"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+rm(list = ls())
+# functions
+sim_weight <- function(lengths, sd, b) {
+  unobserved <- rnorm(length(lengths), 0, 1) # random noise
+  weights <- b*lengths + unobserved
+  return(weights)
+}
+sim_colour <- function(lengths, sd, b) {
+  unobserved <- rnorm(length(lengths), 0, 1) # random noise
+  colour <- b*lengths + unobserved
+  return(colour)
+}
+sim_predation <- function(colours, weights, sd, bC, bW) {
+  unobserved <- rnorm(length(colours), 0, 1) # random noise
+  predation <- bC*colours + bW*weights + unobserved
+  return(predation)
+}
+sim_reproduction <- function(colours, weights, sd, bC, bW) {
+  unobserved <- rnorm(length(colours), 0, 1) # random noise
+  reproduction <- bC*colours + bW*weights + unobserved
+  return(reproduction)
+}
+```
+
+```{r}
+set.seed(123) 
+# create frog data set
+# number of frogs
+n_frog <- 75
+# generate some lengths
+lengths <- rnorm(n_frog, 0, 1)
+# Length -> Weight
+weights <- sim_weight(lengths, 1, 1)
+# Length -> Colour
+colours <- sim_colour(lengths, 1, -1)
+# colour -> predation, weight -> predation
+predation <- sim_predation(colours, weights, sd=1, bC=1.5, bW=1)
+# colour -> reproduction, weight->reproduction
+reproduction <- sim_reproduction(colours, weights, sd=1, bC=-1.5, bW=1)
+
+frog_data <- list(
+  weights=standardize(weights),
+  lengths=standardize(lengths),
+  colours=standardize(colours),
+  reproduction=standardize(reproduction),
+  predation=standardize(predation)
+)
+
+length_model <- ulam(
+  alist(
+    weights ~ dnorm(mu, sigma),
+    mu <- alpha + bL*lengths,
+    alpha ~ dnorm(0,0.5),
+    bL ~ dlnorm(0,0.2),
+    sigma ~ dexp(1)
+  ), data = frog_data, chains = 4, log_lik = T
+)
+# generate a sequence of lengths to compute the posterior mean
+lengths_seq <- seq(-3, 3, by=1)
+
+# compute the mean predicted by the model over our range of lengths
+mu <- link(length_model, data=list(lengths=lengths_seq))
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI, prob=.89)
+
+plot(weights ~ lengths, data=frog_data, col="deepskyblue4", lwd=2, xlab="Frog length std (mm)", ylab="Frog weight std (g)")
+lines(lengths_seq, mu_mean, col="black", lwd=2)
+shade(mu_PI, lengths_seq)
+```
+
+So far we have looked at the way statistical models can:
+
+-   Describe the (above) points in our data by fitting a model (linear regression)
+
+-   Describe what function explains these points (causal inference)
+
+We can also use statistical models to aid in *prediction*. What is going to be the next observation from the same process.
+
+#### Leave-one-out cross-validation (LOOCV)
+
+LOOCV is a process in which we can estimate how well our model makes predictions out of sample
+
+-   Drop one point out of the data set
+-   Fit a linear regression to the remaining points
+-   Try and predict the dropped point.
+-   Calculate a prediction error
+-   Repeat for all remaining points
+
+```{r}
+plot(frog_data$lengths, frog_data$weights, col=ifelse(frog_data$lengths < -2.4,"orange","deepskyblue4"), lwd=2, xlab="Frog length (mm)", ylab="Frog weight (g)")
+```
+
+Dropping orange point from the data set and fitting a new regression
+
+```{r}
+# copy original data
+frog_data_loo <- frog_data
+# find index of point where its length is less than -2.4
+loo_point <- which(frog_data$lengths < -2.4)
+# remove that point from lengths
+frog_data_loo$lengths <- frog_data$lengths[-c(72)]
+# remove that point from weights
+frog_data_loo$weights <- frog_data$weights[-c(72)]
+
+# run model
+length_loo_model <- ulam(
+  alist(
+    weights ~ dnorm(mu, sigma),
+    mu <- alpha + bL*lengths,
+    alpha ~ dnorm(0,0.5),
+    bL ~ dlnorm(0,0.2),
+    sigma ~ dexp(1)
+  ), data = frog_data_loo, chains = 4
+)
+```
+
+```{r}
+# generate a sequence of lengths to compute the posterior mean
+lengths_seq <- seq(-3, 3, by=1)
+
+# compute the mean predicted by the model over our range of lengths
+mu <- link(length_loo_model, data=list(lengths=lengths_seq))
+mu_mean_loo <- apply(mu, 2, mean)
+mu_PI_loo <- apply(mu, 2, PI, prob=.89)
+
+# comparison of old and new regression lines
+plot(weights ~ lengths, data=frog_data, col=ifelse(frog_data$lengths < -2.4,"orange","deepskyblue4"), lwd=2, xlab="Frog length std (mm)", ylab="Frog weight std (g)")
+lines(lengths_seq, mu_mean_loo, col="orange", lwd=2)
+shade(mu_PI_loo, lengths_seq)
+lines(lengths_seq, mu_mean, col="deepskyblue4", lwd=2)
+shade(mu_PI, lengths_seq)
+legend("topleft", legend = c('Full Data', 'Loo Data'), col=c('deepskyblue4', 'orange'), lty=1)
+```
+
+Predict where dropped point should be, and calculate the error
+
+```{r}
+plot(weights ~ lengths, data=frog_data, col=ifelse(frog_data$lengths < -2.4,"orange","deepskyblue4"), lwd=2, xlab="Frog length std (mm)", ylab="Frog weight std (g)")
+lines(lengths_seq, mu_mean_loo, col="orange", lwd=2)
+shade(mu_PI_loo, lengths_seq)
+lines(lengths_seq, mu_mean, col="deepskyblue4", lwd=2)
+shade(mu_PI, lengths_seq)
+points(frog_data$lengths[c(72)], -1.75, pch=19, col="orange" )
+segments(x0=frog_data$lengths[c(72)],y0=frog_data$weights[c(72)], x1=frog_data$lengths[c(72)], y1=-1.75, lty = 2, col="orange" )
+legend("topleft", legend = c('Full Data', 'Loo Data'), col=c('deepskyblue4', 'orange'), lty=1)
+```
+
+Doing this for each point, dropping the data point, refitting a line, calculating the prediction error and summing up gives us a measure of its out-of-sample predictive accuracy.
+
+While this is conceptually easier to grasp, it can be a intensive computation. Instead of doing all of these computations, there are two ways the out-of-sample predictive accuracy can be measured.
+
+-   Pareto-smoothed importance sampling cross validation (PSIS)
+
+-   Widely applicably information criterion (WAIC)
+
+```{r}
+# PSIS
+PSIS(length_model)
+WAIC(length_model)
+```
+
+You can see that both give us approximately the same answers.
+
+To go through these outputs:
+
+-   WAIC/PSIS is the score for out-of-sample deviance (lower the better)
+-   lppd: log-pointwise-posterior-density: the Bayesian version of log probability
+-   penalty: effective number of parameters penalty
+-   std_err: standard error of WAIC/PSIS score
+
+**Cross validation measures predictive accuracy but doesn't do anything about it.**
+
+**Regularization is a procedure of designing a model that produces good predictions.**
+
+## Regularization
+
+We want our models to learn the regular features of the generative process from the sample and use those regular features to make predictions.
+
+This is important as not every feature of the sample is regular, that is, it does not represent the long run excepted value of the generative processes.
+
+We can use regularizing priors to limit the rate at which our model learns from the sample data. When these priors are tuned correctly, they can reduce the model overfitting to sample but still learn the regular features of the data.
+
+```{r}
+dist1 <- rnorm(1000, mean=0, sd=10)
+dist2 <- rnorm(1000, mean=0, sd=1)
+
+plot(density(dist1), ylim=c(0, 0.4), xlim=c(-20,20),main="", xlab="", col="deepskyblue4", lwd=1)
+lines(density(dist2), col="orange", lwd=1)
+legend("topright", legend = c('Normal(0,10)', 'Normal(0,1)'), col=c('deepskyblue4', 'orange'), lty=1)
+```
+
+```{r}
+dist3 <- rnorm(1000, mean=0, sd=0.1)
+
+plot(density(dist1), ylim=c(0, 3.5), xlim=c(-20,20),main="", xlab="", col="deepskyblue4", lwd=1)
+lines(density(dist2), col="orange", lwd=1)
+lines(density(dist3), col="red", lwd=1)
+legend("topright", legend = c('Normal(0,10)', 'Normal(0,1)', 'Normal(0,0.1)'), col=c('deepskyblue4', 'orange', 'red'), lty=1)
+```
+
+The more informative our priors become the more skeptical they are of extreme values, and so the data needs to "work harder" at getting the model to learn the features of the data. In fact if they are far too skeptical it becomes almost impossible for the model to change into an accurate posterior distribution given the data.
+
+## Overfitting and Underfitting
+
+-   Overfitting: Model makes poor predictions, as it learns too much from the data.
+
+    -   More parameters always improves model fit to sample data.
+
+-   Underfitting: Model makes poor predictions, as it doesn't learn enough from the data.
+
+    -   Using too few parameters leads to models that inaccurate within sample and out-of sample
+
+We can use the tools above to assist in navigating between over and underfitting. Using *regularizing priors* to tell the model to not get overly excited by the data, and \*information criteria\* and \*cross-validation\* to estimate predictive accuracy.
+
+## Model Comparison vs Model Selection
+
+One thing we can do with all of these tools is to perform *model selection*, which means choosing the model with the lowest PSIS/WAIC value. An issue with this idea is maximizing predictive accuracy is not the same is not the same as making inference based on causation. In fact, models that counfound causal inference can make better predictions.
+
+Instead we prefer a concept of *model comparison*, which uses multiple models to understand how different variables influence predictions and when used with a causal model and independencies help us infer causal relationships.
+
+Lets go through a simulated example.
+
+```{r}
+library(dagitty)
+collider_dag <- dagitty("dag{ A-> C B->C}")
+coordinates(collider_dag) <- list(x=c(B=2, A=0, C=2), y=c(B=0, A=2, C=2))
+drawdag(collider_dag)
+```
+
+```{r}
+# simulate our data
+A <- rnorm(100, 0, 1)
+B <- rnorm(100, 0, 1)
+
+# effect sizes
+bA = -1.5
+bB = 1.5
+C <- rnorm(100, bA*A + bB*B, 1)
+
+sim_data <- list(
+  A = standardize(A),
+  B = standardize(B),
+  C = standardize(C)
+)
+```
+
+We want to see the effect of A on B
+
+```{r}
+A_model <- ulam(
+  alist(
+    B ~ dnorm(mu, sigma),
+    mu <- alpha + bA*A,
+    alpha ~ dnorm(0,1),
+    bA ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data = sim_data, chains = 4, log_lik = T
+)
+
+AC_model <- ulam(
+  alist(
+    B ~ dnorm(mu, sigma),
+    mu <- alpha + bC*C + bA*A,
+    alpha ~ dnorm(0,1),
+    bC ~ dnorm(0,1),
+    bA ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data = sim_data, chains = 4, log_lik = T
+)
+```
+
+Lets take a look at the effects of each model, we are expecting that A has no effect on B
+
+```{r}
+plot(coeftab(A_model, AC_model))
+```
+
+Ok, so in our model with just A, we get what we expect, no effect of A on B, but when we introduce C (a collider), this drastically changes our estimate of the effect of A on B, because we have opened a back door path by including the collider.
+
+What model do we use here? A_model or AC_model?
+
+Now, lets see how they do at making predictions.
+
+```{r}
+compare(A_model, AC_model, func=PSIS)
+```
+
+The AC_model is the better model at predicting. Which model should we use now? Why is it so much better?
+
+If we just went by the methods of model selection, we would pick AC_model, as it is better at predicting out-of-sample B's Why? because conditioning on the collider induces a statistical association, so adds to predictive accuracy. While the AC model is better at predicting it fails causally.
+
+Lastly, lets go through these tables -
+
+-   WAIC - SE: standard error of WAIC
+-   dWAIC: difference between each models WAIC and the best WAIC in the set
+-   dSE: standard error fro the best model
+-   pWAIC: penalty term - these numbers are close to the number of parameters in the posterior
