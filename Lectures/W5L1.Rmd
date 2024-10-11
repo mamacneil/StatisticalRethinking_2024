@@ -1,0 +1,476 @@
+---
+title: "W5L1"
+author: "Arun Oakley-Cogan"
+date: "2024-10-09"
+output: html_document
+---
+
+McElreath's lecture for today: <https://www.youtube.com/watch?v=QhHfo6-Bx8o>
+
+McElreath's lectures for the whole book are available here: <https://github.com/rmcelreath/statrethinking_winter2019>
+
+An R/Stan repo of code is available here: <https://vincentarelbundock.github.io/rethinking2/>
+
+An excellent port to Python/PyMC Code is available here: <https://github.com/dustinstansbury/statistical-rethinking-2023>
+
+You are encouraged to work through both of these versions to re-enforce what we're doing in class.
+
+```{r}
+library(rethinking)
+library(dagitty)
+rm(list=ls())
+```
+
+# Information-based model comparsion
+
+With the information criteria outlined last week, we can now see how to use this information in practice to help diagnose problems in model specification. This is a really powerful result, so we'll take our time to step through it.
+
+# The Monkies
+
+We'll illustrate how to do this using the primate data set
+
+```{r}
+data("Primates301")
+mdata <- Primates301
+mdata['spp'] =paste(as.character(mdata$genus),as.character(mdata$species))
+head(mdata)
+```
+
+```{r}
+# Drop rows missing longevity, brain size, or body mass
+mdata <- mdata[complete.cases(mdata[, c('brain', 'body','longevity')]),]
+head(mdata)
+```
+
+In this situation we want to build a model looking at the influence of body mass and brain size on lifespan. We can represent the causal model using dagitty
+
+```{r}
+monkey_dag <- dagitty("dag{ M -> L M -> B B->L }")
+drawdag(monkey_dag)
+```
+
+Here we're asserting that longer lifespans are caused by being bigger and having bigger brains (clever monkies). We can run three models to see which has the most WAIC-based support:
+
+$$
+M_{MB}: \enspace \enspace L \sim N(\beta_0+\beta_M M+\beta_B B, \sigma) \enspace \enspace
+$$
+
+$$
+M_{M}: \enspace \enspace   L \sim N(\beta_0+\beta_M M, \sigma)
+$$
+
+$$
+M_{B}: \enspace \enspace  L \sim N(\beta_0+\beta_B B, \sigma)
+$$
+
+Looking piecewise at how much better things are when adding each parameter.
+
+```{r}
+# grab data
+model_data <- list(
+  M = standardize(log(mdata$body)),
+  B = standardize(log(mdata$brain)),
+  L = standardize(log(mdata$longevity)),
+  R = standardize(log(mdata$brain))/standardize(log(mdata$body))
+)
+```
+
+```{r include=FALSE}
+# full monkey model
+full_monkey <- ulam(
+  alist(
+    L ~ dnorm(mu, sigma),
+    mu <- alpha + betaM*M + betaB*B,
+    alpha ~ dnorm(0, 0.2),
+    betaM ~ dnorm(0, 0.5),
+    betaB ~ dnorm(0,0.5),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r include=FALSE}
+# big monkey model
+big_monkey <- ulam(
+  alist(
+    L ~ dnorm(mu, sigma),
+    mu <- alpha + betaM*M,
+    alpha ~ dnorm(0, 0.2),
+    betaM ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r include=FALSE}
+# smart monkey model
+smart_monkey <- ulam(
+  alist(
+    L ~ dnorm(mu, sigma),
+    mu <- alpha + betaB*B,
+    alpha ~ dnorm(0, 0.2),
+    betaB ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r}
+compare(full_monkey, smart_monkey, big_monkey, func=WAIC)
+```
+
+This table gives lots of useful information for comparision - but also relative WAIC based model weight - which has the interpretation of the WAIC-based probability that Full is the best model (lowest KL-divergence) in the set of models compared. The calcualtion for this is
+
+$$
+weight_{i} = \frac{exp(-\frac{1}{2}\Delta_{i})}{\sum_{i=1}^{K}-\frac{1}{2}\Delta_{k})}
+$$
+
+where $\Delta_{i}$ is the `elpd_diff` above, the difference in WAIC units between each model and the lowest WAIC model.
+
+```{r}
+plot(compare(full_monkey, smart_monkey, big_monkey, func=WAIC))
+```
+So if we look at the WAIC model results, we get evidence that the full model (M_MB) and the smart (M_B) model have equal support, while the body mass model is far worse. What's going on? Well to figure it out let's look at the posteriors from all three models:
+
+```{r}
+plot(coeftab(smart_monkey, big_monkey, full_monkey))
+```
+
+What you can see is that the effect of body size that is so strong in model `M_M` ('Big') gets negative in the full model (`M_MB`), while the effect of brain size in model `M_B` ('Smart') remains positive (although more uncertain). So why does body mass go negative in the joint model? Well to figure that out, we can look at the pointwise WAIC predictions between the Smart model and the joint model:
+
+```{r}
+# Full model pointwise WAIC estimates
+pWAIC_mb = WAIC(full_monkey, pointwise = TRUE)
+# Brain size model pointwise WAIC estimates
+pWAIC_b = WAIC(smart_monkey, pointwise = TRUE)
+# Difference between them
+dWAIC = pWAIC_mb$WAIC - pWAIC_b$WAIC
+```
+
+```{r}
+Rplot = model_data$R
+Rplot[Rplot<0] = min(Rplot[Rplot>0])
+```
+
+```{r}
+spp <- c('Cebus albifrons','Cebus capucinus', 'Cebus olivaceus','Gorilla gorilla', 'Lepilemur leucopus', 'Cacajao melanocephalus')
+spp_indx <- which(mdata$spp %in% spp)
+
+symbols(x=dWAIC, y=model_data$L, circles = Rplot, inches=1/3, fg="deepskyblue4", bg=col.alpha("deepskyblue4",0.3), xlab="Pointwise difference in WAIC", ylab="log(longevity)(std)")
+text(dWAIC[spp_indx],model_data$L[spp_indx],labels=mdata$spp[spp_indx], adj=c(0,-.5), cex=0.8)
+abline(h=0,v=0, lty=2)
+text(-0.12,-3.1,'<-- Full model better', cex=0.8)
+text(0.12,-3.1,'Smart model better -->', cex=0.8)
+```
+# Conditionaily
+
+A couple of classic examples of conditioning on a collider can be seen in thinking about manatees
+
+
+
+Because of the observation of scars on so many manatees, and so many dying from boat strikes, Florida passed laws requring cowlings over the propellers of speadboats to save manatees. However the problem with this - other than helping with nasty scars - is that it doesn't deal with the cause of death in manatees, which is idiots running them over in shallow water and causing massive internal trauma. In other words 
+
+
+A second favourite example comes from WWII, where [Abraham Wald](https://en.wikipedia.org/wiki/Abraham_Wald) was tasked with figuring out where to place the limited armour that could be added to bombers and other allied airplanes
+
+
+In [a series of memos](http://people.ucsc.edu/~msmangel/Wald.pdf) Wald figured out that rather than putting armour on areas of returning planes that had lots of bullet holes, it was correct to put the armour on areas that did not. 
+
+
+As for the manatees, by conditioning on survivors, the cause of death becomes obscured. 
+
+
+# Interactions
+
+Interactions measure the influence of various predictors conditional on the other predictors in a model. Interactions can happen with the slope or the intercept or both. 
+
+
+Let's start with a discrete interaction on a continuous variable. By way of example, let's have a look at the ruggedness of African nations:
+
+```{r}
+data("rugged")
+tdata <- rugged
+
+# make log version of outcome 
+tdata$log_gdp <- log( tdata$rgdppc_2000 ) 
+# extract countries with GDP data 
+rdata <- tdata[ complete.cases(tdata$rgdppc_2000) , ] 
+# rescale variables 
+rdata$log_gdp_std <- rdata$log_gdp / mean(rdata$log_gdp) 
+rdata$rugged_std <- rdata$rugged / max(rdata$rugged)
+# create continent ID
+rdata$cid <- ifelse( rdata$cont_africa==1 , 1 , 2 )
+head(rdata)
+```
+```{r}
+library(pracma)
+# African nations
+# grab function to plot line
+coef <- polyfit(rdata[rdata$cid==1,]$rugged_std, rdata[rdata$cid==1,]$log_gdp_std, 1)
+
+par(mfrow=c(1,2))
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="African Nations")
+lines(rdata[rdata$cid==1,]$rugged_std, polyval(coef, rdata[rdata$cid==1,]$rugged_std), lwd=2, col="orange")
+
+# Non African Nations
+coef <- polyfit(rdata[rdata$cid==2,]$rugged_std, rdata[rdata$cid==2,]$log_gdp_std, 1)
+plot(rdata[rdata$cid==2,]$rugged_std,rdata[rdata$cid==2,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="Non African Nations")
+lines(rdata[rdata$cid==2,]$rugged_std, polyval(coef, rdata[rdata$cid==2,]$rugged_std), lwd=2, col="orange")
+```
+So to put together an interaction model we can start by guessing at some relatively benign priors and adding them to a model that allows for different intercepts and slopes for African/non-African nations:
+
+```{r include=FALSE}
+# model data
+model_data <- list(
+  GDP = rdata$log_gdp_std,
+  R = rdata$rugged_std,
+  cid = rdata$cid,
+  meanR = mean(rdata$rugged_std)
+)
+rugged_model <- ulam(
+  alist(
+    GDP ~ dnorm(mu, sigma),
+    mu <- alpha[cid] + betaR[cid]*(R - meanR),
+    alpha[cid] ~ dnorm(1,1),
+    betaR[cid] ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data=model_data, chains=4, log_lik = T
+)
+```
+
+```{r}
+# sample from our priors for prior predictive plots
+prior <- extract.prior(rugged_model) # we can do this to get our priors?? Yes We can.
+
+# generate sequence of ruggedness to plot over
+rugg_seq <- seq( from=-0.1 , to=1.1 , length.out=30 )
+par(mfrow=c(1,2))
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="African Nations")
+for (i in 1:100) curve(prior$alpha[i,1] + prior$betaR[i,1]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+
+# Non African Nations
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="Non African Nations")
+for (i in 1:100) curve(prior$alpha[i,2] + prior$betaR[i,2]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+```
+Well this is a mess, let's try something tighter:
+
+```{r}
+rugged_model <- ulam(
+  alist(
+    GDP ~ dnorm(mu, sigma),
+    mu <- alpha[cid] + betaR[cid]*(R - meanR),
+    alpha[cid] ~ dnorm(1, 0.1),
+    betaR[cid] ~ dnorm(0, 0.1),
+    sigma ~ dexp(1)
+  ), data=model_data, chains=4, log_lik = T
+)
+```
+```{r}
+# sample from our priors for prior predictive plots
+prior <- extract.prior(rugged_model) # we can do this to get our priors?? Yes We can.
+
+# generate sequence of ruggedness to plot over
+rugg_seq <- seq( from=-0.1 , to=1.1 , length.out=30 )
+par(mfrow=c(1,2))
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="African Nations")
+for (i in 1:100) curve(prior$alpha[i,1] + prior$betaR[i,1]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+
+# Non African Nations
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="Non African Nations")
+for (i in 1:100) curve(prior$alpha[i,2] + prior$betaR[i,2]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+```
+Humm, not bad, maybe a little too tight (missing stuff at the bottom), one more try:
+
+```{r}
+rugged_model <- ulam(
+  alist(
+    GDP ~ dnorm(mu, sigma),
+    mu <- alpha[cid] + betaR[cid]*(R - meanR),
+    alpha[cid] ~ dnorm(1, 0.1),
+    betaR[cid] ~ dnorm(0, 0.3),
+    sigma ~ dexp(1)
+  ), data=model_data, chains=4, log_lik = T
+)
+
+# sample from our priors for prior predictive plots
+prior <- extract.prior(rugged_model) # we can do this to get our priors?? Yes We can.
+
+# generate sequence of ruggedness to plot over
+rugg_seq <- seq( from=-0.1 , to=1.1 , length.out=30 )
+par(mfrow=c(1,2))
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="African Nations")
+for (i in 1:100) curve(prior$alpha[i,1] + prior$betaR[i,1]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+
+# Non African Nations
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="Non African Nations")
+for (i in 1:100) curve(prior$alpha[i,2] + prior$betaR[i,2]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+```
+Ok, seems to get the balance of just a bit wider than is sensible. So let's what it looks like with some data in the posterior
+```{r}
+# sample from our priors for prior predictive plots
+post <- extract.samples(rugged_model) # we can do this to get our priors?? Yes We can.
+
+# generate sequence of ruggedness to plot over
+rugg_seq <- seq( from=-0.1 , to=1.1 , length.out=30 )
+par(mfrow=c(1,2))
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="African Nations")
+for (i in 1:100) curve(post$alpha[i,1] + post$betaR[i,1]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+
+# Non African Nations
+plot(rdata[rdata$cid==1,]$rugged_std,rdata[rdata$cid==1,]$log_gdp_std, xlab="Ruggedness (ratio)", lwd=2, ylab="log(GDP) (ratio to mean)", col="deepskyblue4", main="Non African Nations")
+for (i in 1:100) curve(post$alpha[i,2] + post$betaR[i,2]*x, from=-0.1, to=1.1, add=T, col=col.alpha("black",0.2))
+```
+
+```{r}
+# net difference in ruggedness effect
+net_rug <- post$betaR[,1] - post$betaR[,2]
+hist(net_rug,xlab='Non-africa θ - Africa θ')
+```
+```{r}
+1-sum(net_rug<0)/length(net_rug)
+```
+
+So what this says is a couple of things:
+
+1. In flat places, GDP among African nations is a fraction (0.86) of flat Non-African (1.1) nations
+2. As ruggedness increases, African nations become wealthier while Non-African nations become poorer
+3. There is strong evidence of ruggedness having a more positive slope in African nations
+
+Point (2) bears thinking about. Why does this happen? Well it has a very dark answer that you'll explore in the homework this week.
+
+An important point about interactions is that they are ALWAYS difficult to interpret. One of the most basic problems is that they are statistically but not congnitively symmetric: 
+
+    - *The effect of ruggedness on a nation's GDP depends on what continent it is from*
+    - *The effect of continent depends on ruggedness*
+    
+If you read these carefully, one will make complete sense and the other is nonsense. This is your causal brain understanding that you can't move nations among continents.
+
+# Bloomin' tulips
+
+For a more comprehensive data, let's have a look at a continuous interaction, including combinations of water and shade on tulip blooming. 
+
+First, let's import the data
+
+```{r}
+data("tulips")
+tdata <- tulips
+head(tdata)
+```
+
+```{r}
+# model data
+model_data <- list(
+  B = tdata$blooms / max(tdata$blooms),
+  W = tdata$water - mean(tdata$water),
+  S = tdata$shade - mean(tdata$shade)
+)
+```
+
+Next we need some priors - what would be sensible? We now that blooms (B) has been scaled to be between 0 and 1, the intercept should be mostly in this range. To figure out what's within that range, we can first take a stab that the intercept will be at roughly 0.5 when water (W) and shade (S) are at their mean values. For the standard deviation we can then figure out what the cumulative probability is for 0 and 1, given a $N(0.5, \sigma)$ distribtuion, with $\sigma$ found by guessing:
+
+```{r}
+cdf = ecdf(rnorm(1000, 0.5, 1))
+cdf(0)
+```
+Well this is too big, more than 30% of the prior would be below zero, maybe we should aim for the conventional 5% (which means 2.5% should be below zero and the other 2.5% above 1). How about $N(0.5, 0.25)$?
+
+```{r}
+cdf = ecdf(rnorm(1000, 0.5, 0.25))
+cdf(0)
+cdf(1)
+```
+Looking good - ok onto the slopes. What's reasonable here? Well despite knowing there's likely an interaction effect, our ignorant, slightly wide prior should allow for either water or shade to account for the full 0 to 1 range in blooms. So to do this we can see how wide the range is for each
+
+```{r}
+diff(range(model_data$W))
+diff(range(model_data$S))
+```
+So over a range of 2 units, we need a prior that can span the full range from 0 to 1. This would imply a slope of -0.5 or 0.5 (i.e. $2*0.5=1$). So a sensible prior for $2SD=0.5$ would seem to be 0.25:
+
+```{r}
+cdf = ecdf(rnorm(1000, 0.5, 0.25))
+cdf(-0.5)
+cdf(1)
+```
+Perfect, now putting this all together:
+
+```{r}
+# basic bloom model
+bloom_model <- ulam(
+  alist(
+    B ~ dnorm(mu, sigma),
+    mu <- alpha + betaW*W + betaS*S,
+    alpha ~ dnorm(0.5,0.25),
+    betaW ~ dnorm(0, 0.25),
+    betaS ~ dnorm(0, 0.25),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r}
+ibloom_model <- ulam(
+  alist(
+    B ~ dnorm(mu, sigma),
+    mu <- alpha + betaW*W + betaS*S + betaSW*S*W,
+    alpha ~ dnorm(0.5,0.25),
+    betaW ~ dnorm(0, 0.25),
+    betaS ~ dnorm(0, 0.25),
+    betaSW ~ dnorm(0, 0.25),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+```{r}
+# sample from our priors for prior predictive plots
+prior <- extract.prior(ibloom_model) # we can do this to get our priors?? Yes We can.
+par(mfrow=c(1,3)) # 3 plots in 1 row 
+for ( s in -1:1 ) { 
+  idx <- which( model_data$S==s )
+  plot( model_data$W[idx] , model_data$B[idx] , xlim=c(-1,1) , ylim=c(0,1) , xlab="water" , ylab="blooms" , pch=16 , col=rangi2, main=paste("Shade=",as.character(s))) 
+  mu <- link( ibloom_model, post=prior, data=data.frame( S=s , W=-1:1 ) ) 
+  for ( i in 1:200 ) lines( -1:1 , mu[i,] , col=col.alpha("black",0.3) ) }
+```
+Well these look terrible, maybe something a bit smaller?
+```{r}
+ibloom_model <- ulam(
+  alist(
+    B ~ dnorm(mu, sigma),
+    mu <- alpha + betaW*W + betaS*S + betaSW*S*W,
+    alpha ~ dnorm(0.5,0.25),
+    betaW ~ dnorm(0, 0.1),
+    betaS ~ dnorm(0, 0.1),
+    betaSW ~ dnorm(0, 0.1),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r}
+# sample from our priors for prior predictive plots
+prior <- extract.prior(ibloom_model) # we can do this to get our priors?? Yes We can.
+par(mfrow=c(1,3)) # 3 plots in 1 row 
+for ( s in -1:1 ) { 
+  idx <- which( model_data$S==s )
+  plot( model_data$W[idx] , model_data$B[idx] , xlim=c(-1,1) , ylim=c(0,1) , xlab="water" , ylab="blooms" , pch=16 , col=rangi2, main=paste("Shade=",as.character(s))) 
+  mu <- link( ibloom_model, post=prior, data=data.frame( S=s , W=-1:1 ) ) 
+  for ( i in 1:200 ) lines( -1:1 , mu[i,] , col=col.alpha("black",0.3) ) }
+```
+These look a bit better, let's run with them.
+
+```{r}
+# sample from our posterior for the non-interaction model and interaction model
+par(mfrow=c(2,3)) # 3 plots in 2 row 
+for ( s in -1:1 ) { 
+  idx <- which( model_data$S==s )
+  plot( model_data$W[idx] , model_data$B[idx] , xlim=c(-1,1) , ylim=c(0,1) , xlab="water" , ylab="blooms" , pch=16 , col=rangi2, main=paste("Shade=",as.character(s))) 
+  mu <- link( bloom_model, data=data.frame( S=s , W=-1:1 ) ) 
+  for ( i in 1:200 ) lines( -1:1 , mu[i,] , col=col.alpha("black",0.1) ) }
+for ( s in -1:1 ) { 
+  idx <- which( model_data$S==s )
+  plot( model_data$W[idx] , model_data$B[idx] , xlim=c(-1,1) , ylim=c(0,1) , xlab="water" , ylab="blooms" , pch=16 , col=rangi2, main=paste("Shade=",as.character(s))) 
+  mu <- link( ibloom_model, data=data.frame( S=s , W=-1:1 ) ) 
+  for ( i in 1:200 ) lines( -1:1 , mu[i,] , col=col.alpha("black",0.1) ) }
+```
+So, with just one interaction we've got a heck of a lot going on. Nervous yet? 
+
