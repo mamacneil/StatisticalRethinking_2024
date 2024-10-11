@@ -1,0 +1,326 @@
+---
+title: "W4L2"
+author: "Arun Oakley-Cogan"
+date: "2024-10-02"
+output: html_document
+---
+
+## From information theory to model comparsion
+
+The advances of Claude Shannon are huge, on par with those of Allen Turing or, some would argue, even Einstein, in that they came out of nowhere and were singular in their clear contribution to the modern world. A great article outlining his remarkable life can be found [here])<https://spectrum.ieee.org/tech-history/cyberspace/claude-shannon-tinkerer-prankster-and-father-of-information-theory>). You can grab the original paper here. There is also a new documentary film: <https://thebitplayer.com/>
+
+However the path from information theory relating to how to encode things and send them over a wire and model comparison is a difficult one, so let's work carefully through how these things relate.
+
+## Information
+
+Defining information is an obscure concept, but here we'll look at Shannon's defnition and see how it plays out. First, the big insight is to ask *how much is our uncertainty reduced once we learn an outcome*. To figure this out we need to unpack this statement a bit:
+
+1.  By *outcome* we mean some measurable thing that occurs as a result of some phenomenon
+
+2.  By *uncertainty* we mean here the range of guesses or possibilities as to what the next outcome will be when it appears
+
+3.  By *how much* we are asking for a measure or metric that quantifies a net change in uncertainty before and after an outcome is observed.
+
+Confused? Ok, well let's start with item `3`, which is Shannon's measure of *information entropy*, which states that **the uncertainty (H) contained in a probability distribution is the average log-probability (p) of an event,** which can be expressed as
+
+$$
+H(p) = -\sum^{n}_{i=1}p_i log(p_i).
+$$
+
+```{r}
+# Information entropy function
+IE <- function(p) {
+    return(-sum(p*log(p)))
+}
+```
+
+So to make this concrete, let's say we have a model for the weather, where the true probabilites are 0.3 for rain ($p_1$) and 0.7 for sun ($p_2$). So the total entropy (or uncertainty) in this situation is:
+
+```{r}
+p = c(0.3, 0.7)
+IE(p)
+```
+
+We can imagine however, a place where it either mostly rains (Glasgow):
+
+```{r}
+p = c(0.9, 0.1)
+IE(p)
+```
+
+Or where it is mostly sunny (LA):
+
+```{r}
+p = c(0.1, 0.9)
+IE(p)
+```
+
+Which leads to the question of what kind of place has the greatest uncertainty?
+
+```{r}
+# True probabilities of rain and sun
+p = c(0.5, 0.5)
+IE(p)
+```
+
+This makes total sense, if it mostly rains or is sunny, there is less uncertainty; if it is 50/50, then who knows? Probability is amazing.
+
+## Divergence
+
+Now that we can measure the level of uncertainty inherent in a known probability distribution, the question is how can we use this to measure how well a model we might propose is from this truth (don't worry, we'll address the fact that we don't know the truth shortly)? Well, we can express the distance (in uncertainty units) between our model (q) and the true model (p) as *divergence*, expressed as the sum of the average distances between them
+
+$$
+D_{KL}(p,q) = \sum^{n}_{i=1}p_i(log(p_i)-log(q_i)).
+$$
+
+```{r}
+KLD <- function(p, q){
+  return(sum(p*(log(p) - log(q))))
+}
+```
+
+This measure is called the Kullback-Leibler divergence after [Solomon Kullback](https://en.wikipedia.org/wiki/Solomon_Kullback) and Richard Leibler, two crypto-analysts at the US National Security Agency who developed the measure in 1951. With the true model and our proposed model in hand, we can calculate the KL divergence for model:
+
+```{r}
+# True probabilities of rain and sun
+p = c(0.3, 0.7)
+
+# Our ignorant guess as the true probabilites of rain and sun
+q1 = c(0.5, 0.5)
+
+# KL Divergence
+KLD(p, q1)
+```
+
+```{r}
+# Our best guess as the true probabilites of rain and sun
+q2 = c(0.2, 0.8)
+
+# KL Divergence
+KLD(p, q2)
+```
+
+So if we propose a model that's closer to the truth than a coin flip, the KL divergence gets smaller. A key nuance in this calculation is that divergence is not symmetric (this is the mars-earth example in the book). If we reverse the true and proposed models:
+
+```{r}
+KLD(q2,p)
+```
+
+You can see that the level of surprise is lower. Why? Because with 0.2/0.8 as the 'true' model there is less 'surprise' ($D_{KL}=0.026$) in going from a less-certain set of conditions (earth, $q2=[0.2, 0.8]$) to a more-certain set of conditions (mars, $p=[0.3, 0.7]$) than there is ($D_{KL}=0.028$) in going from a more-certain set of conditions (mars, $p=[0.3, 0.7]$) to a less-certain set of conditions (earth, $q2=[0.2, 0.8]$). Nutty.
+
+## Relative log-probability
+
+Ok, we now have a measure of the information distance between our model and the truth. Well big deal - we'll never know the truth ($p$), so what use is this? Well, while we'll never know the truth, we can calculate the KL divergence for a bunch of models. How? Well when comparing two models we can assume the truth is constant, meaning we can just sub in something sensible ($x_i$) for the $p_i$ values
+
+$$
+D_{KL}(p,q) = \sum^{n}_{i=1}x_i(log(x_i)-log(q_i)).
+$$
+
+Let's give this a try with our $q1$ and $q2$ models:
+
+```{r}
+x = 1
+(KLD(x,q1)-KLD(x,q2))/x
+```
+
+```{r}
+x = 2
+(KLD(x,q1)-KLD(x,q2))/x
+```
+
+```{r}
+x = 6
+(KLD(x,q1)-KLD(x,q2))/x
+```
+
+```{r}
+# Absolute difference in log-probabilites
+abs(sum(log(q1))-sum(log(q2)))
+```
+
+```{r}
+# Absolute difference in log-probabilites
+abs(sum(log(q2))-sum(log(q1)))
+```
+
+So it really doesn't matter what the truth is, we can still compare the relative KL divergence of two models through their log-probabilities. So the log-probability score, or some variant of it, is the basis of *information criteria* used to compare model fits.
+
+## Deviance
+
+In a Bayesian context, with more complex models, things start to become more effort to keep track of because rather than a single point estimate of probability for each observation, we have a distribution of probability. But that aside, calculating the log-probabilities for each point can be done, through the *log-pointwise predictive density*:
+
+$$
+lppd(y|\Theta) = \sum^{}_{i}log\frac{1}{S}\sum_{s}p(y_i|\Theta_s)
+$$
+
+which is simply calculating the log-probabilty of the data ($y$) given the set of parameters ($\theta$) in the current iteration ($s$) of the sampler. We can do this for a set of data:
+
+```{r}
+library(rethinking)
+data("WaffleDivorce")
+
+wdata <- list(
+  D=standardize( WaffleDivorce$Divorce ), 
+  M=standardize( WaffleDivorce$Marriage ), 
+  A=standardize( WaffleDivorce$MedianAgeMarriage ),
+  S=standardize( WaffleDivorce$South ),
+  W=standardize( WaffleDivorce$WaffleHouses )
+)
+```
+
+```{r}
+# Conditiong on Southerness
+south_model <- ulam(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- alpha + betaW*W + betaS*S,
+    alpha ~ dnorm(0,1),
+    betaW ~ dnorm(0,1),
+    betaS ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data = wdata, chains=4, log_lik = T
+)
+
+# Conditiong on Age and Rate
+age_rate_model <- ulam(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- alpha + betaA*A + betaM*M + betaW*W,
+    alpha ~ dnorm(0,1),
+    betaM ~ dnorm(0,1),
+    betaA ~ dnorm(0,1),
+    betaW ~ dnorm(0,1),
+    sigma ~ dexp(1)
+  ), data = wdata, chains=4, log_lik = T
+)
+```
+
+We can now do the calculation
+
+$$
+lppd(y|\Theta) = \sum^{}_{i}log\frac{1}{S}\sum_{s}p(y_i|\Theta_s)
+$$
+
+using the values for each datapoint, and getting the log of their avergae for the Southern model
+
+```{r}
+# calculate the mean lppd for each data point
+post <- extract.samples(south_model, n=1000)
+n_samples <- 1000 
+Slogprob <- sapply( 1:n_samples , function(s) { 
+  mu <- post$alpha[s] + post$betaS[s]*wdata$S + post$betaW[s]*wdata$W 
+  dnorm( wdata$D , mu , post$sigma[s] , log=TRUE ) 
+  })
+n_cases <- length(wdata$D) 
+
+# calculate lppd
+Slppd <- sapply( 1:n_cases , function(i) log_sum_exp(Slogprob[i,]) - log(n_samples) )
+sum(Slppd)
+```
+
+```         
+We can do the same process for the Marriage age/rate model:
+```
+
+```{r}
+# calculate the mean lppd for each data point
+post <- extract.samples(age_rate_model, n=1000)
+n_samples <- 1000 
+AMlogprob <- sapply( 1:n_samples , function(s) { 
+  mu <- post$alpha[s] + post$betaA[s]*wdata$A + post$betaM[s]*wdata$M + post$betaW[s]*wdata$W 
+  dnorm( wdata$D , mu , post$sigma[s] , log=TRUE ) 
+  })
+n_cases <- length(wdata$D) 
+
+# calculate lppd
+AMlppd <- sapply( 1:n_cases , function(i) log_sum_exp(AMlogprob[i,]) - log(n_samples) )
+sum(AMlppd)
+```
+
+for the marriage age and marriage rate model. Higher values here are better (they're more accurate), so the AM model has more support. Multiplying these values by -2 gives us model **deviance**, with smaller values (less deviant) being better:
+
+```{r}
+sum(Slppd)*-2; sum(AMlppd)*-2
+```
+
+# AIC
+
+AIC - that is Akaike's Information Criterion - has a long history in model comparision. It is defined as two times the number of parameters in the model minus the deviance:
+
+$$
+AIC = 2k-2log(\hat{L})
+$$
+
+with $\hat{L}$ being the maximum likelihood. In our case we can sub in the deviance value for the $-2log(\hat{L})$.
+
+```{r}
+# AIC for Southern model
+2*4-2*sum(Slppd)
+```
+
+```{r}
+# AIC for marriage model
+2*5-2*sum(AMlppd)
+```
+So what's happened here? We need some sort of penalty for having added those extra parameters. The $2k$ penalty does this, telling us that the Marriage model has more support, given the data and considering the numbers of parameters used.
+
+All the various information criteria do some version of this, with various improvements over time. AIC was cutting edge 20 years ago, but has been completely replaced by WAIC (the widely-applicable information criteria), so called because it is more generalized. WAIC has an extra bit which is to use a penalty term proportional to the variance in the posterior predictions:
+
+
+$$
+WAIC = -2(lppd-\sum_{i}var_\theta log(y_i|\theta))
+$$
+
+
+To do this by hand, we need to go back to the lppd matrix and calculate the pentalty terms
+
+```{r}
+# calculate penalty term Southern Model
+pWAIC <- sapply( 1:n_cases , function(i) var(Slogprob[i,]) )
+
+WAICs = -2*( sum(Slppd) - sum(pWAIC) )
+WAICs
+```
+
+```{r}
+# calculate penalty term AM Model
+pWAIC <- sapply( 1:n_cases , function(i) var(AMlogprob[i,]) )
+
+WAICam = -2*( sum(AMlppd) - sum(pWAIC) )
+WAICam
+```
+
+Which shows again that the marriage model has more support, given the data.
+Incidentally, rethinking does this calculation for you using WAIC()
+
+```{r}
+WAIC(n=1000, south_model);WAIC(n=1000, age_rate_model)
+```
+
+## Loo-CV
+
+The information based criteria above are but one choice for assessment of relative model fits by scoring their overfitting risk. Another is cross-validation, the omission of one (or more) datapoints that are iteratively compared with their predicted values given a particular model. The average out of sample performace is, as it turns out, a good representation of the log-score of a model. What does this look like? Well similar to the lppd calculation above, it is the deviation between the single dropped observation ($y_i$) and the parameters estimated from the data that excluded $y_i$:
+
+$$
+lppd_{CV} = \sum^{}_{i}log\frac{1}{S}\sum_{s}p(y_i|\Theta_{-i,s})
+$$
+
+However this is computationally expensive to calculate - the number of datapoints times the number of iterations - so [Aki Vehtari](https://users.aalto.fi/~ave/) came up with Pareto-smoothed importance sampling (PSIS) as a very good approximation. It weights each sample by the inverse probabilty of the omitted observation, then takes their normalized sum as a new value, $lppd_{IS}$. As it turns out, the distribution of the largest weights calculated for each $y_i$ should have a [Pareto distribution](https://en.wikipedia.org/wiki/Pareto_distribution), with each $y_i$ having an estimated Pareto $k$ parameter. For observations with $k>0.7$, there is evidence the Pareto distribution is failing and that the observation is highly inflential, given the proposed model.
+
+```{r}
+PSIS(age_rate_model, n=1000);PSIS(south_model, n=1000)
+```
+# So, model comparison...
+
+So now we understand the derivation of information criteria - what should we do with it? Model selection! Many people use information criteria for this but hold on - use of information criteria depends on your objectives. Information criteria is a measure of model fit - it has nothing to do with causal inference. Let's look back at our Waffle House models, the results of which are:
+
+```{r}
+plot(coeftab(south_model, age_rate_model))
+```
+Showing that the Marriage model still sees it as plausible that Waffle Houses have a positive effect on divorce rates, which is silly, and yet if we look at WAIC:
+
+```{r}
+compare(south_model, age_rate_model, func = WAIC)
+```
+
+It would greatly favour the Marriage model. Simple eh?

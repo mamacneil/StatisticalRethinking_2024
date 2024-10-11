@@ -1,0 +1,335 @@
+---
+title: "Tutorial 5 - Conditionality, Interactions and MCMC Diagnostics"
+author: "Arun Oakley-Cogan"
+date: "2024-10-10"
+output: html_document
+---
+
+We have been mentioning throughout the course about conditioning, for example, in your last homework when you built models that conditioned on a simulated variable G. In statistical inference conditioning is everywhere.
+
+-   Data is conditional on the way it makes it into our data set - like the manatees or WW2 bombers.
+-   Posterior distributions are conditional on the data.
+-   Linear regressions are predicting an outcome, y, conditional on it's predictor variables.
+
+Interactions are a type of conditioning where parameters are conditional on other parameters. There are two types of interactions, categorical and continuous. Today, we are taking a look at how we code up categorical interactions in our linear models, and adding in MCMC convergence diagnostics into our workflow.
+
+## **Bayesian Workflow**
+
+1.  Define what we are estimating ***(Causal Structure)***
+2.  Build generative model and simulate data
+    a.  Standardize data
+3.  Build statistical model
+    a.  Prior Predictive Simulation
+4.  Fit statistical model with simulated data
+    a.  **Convergence diagnostics**
+    b.  Posterior Predictive Simulation
+
+### Define what we are estimating ***(Causal Structure)***
+
+Back to our simulated frogs, this time around we also are recording the sex (M/F) of the frog along with its length and weight
+
+**Q1. What is the total effect of Sex on Weight?**
+
+**Q2. What is the direct effect of Sex on Weight?**
+
+```{r}
+library(rethinking)
+library(dagitty)
+rm(list=ls())
+
+# causal model of our question.
+dag_1 <- dagitty( "dag{ Sex -> Length Sex -> Weight Length -> Weight }" )
+
+# we can specify where we want our nodes to sit
+coordinates(dag_1) <- list(x=c(Length=1, Sex=0, Weight=1), y=c(Length=0, Sex=0, Weight=1))
+drawdag(dag_1)
+
+adjustmentSets(dag_1, exposure = 'Sex', outcome='Weight', effect='total')
+adjustmentSets(dag_1, exposure = 'Sex', outcome='Weight', effect='direct')
+```
+
+Here we are stating that whether a frog is make or female directly effects its Length and its Weight and indirectly effects Weight through Length.
+
+Expressed functionally,
+
+Length = f(Sex)
+
+Weight = f(Length, Sex)\
+
+Here, sex is a categorical variable, frogs are labeled as 'Male' or 'Female' and we can work with this data in one of two ways, creating an indicator variable (assign them a 0 or 1) or an index (assign 1, 2 ,3 .. to however many unique categories you have ). Almost always, you want to be using an index variable as this makes our priors easier to deal with.
+
+We will go through using an index variable to assign numbers to unique categories.\
+
+### Define generative model and simulate data
+
+```{r}
+# number of frogs
+n_frogs <- 75
+
+# linear model of lengths and weights.
+simulate_length_weight <- function(sex, b, a) {
+  n <- length(sex) # get the number of frogs
+  # assign lengths of 75 and 90 depending on sex + random variation from our unknown causes
+  length <- ifelse(sex==1,75, 90) + rnorm(n, 0, 5)
+  # calculate weights based on the length and sex + random variation from our unknown causes
+  weight <- a[sex] + b[sex]*length + rnorm(n, 0, 5)
+  return(data.frame(sex, length, weight))
+}
+
+# generate our frog sexes, assuming a 50:50 sex ratio in the population
+sex = sample(c('M', 'F'), size = n_frogs, replace=T, prob=c(0.5,0.5))
+# assign index variable to Males and Females
+sex = ifelse(sex=='F', 1, 2)
+# simulate data
+sim_data <- simulate_length_weight(sex, b=c(0.5, 0.6), a=c(0,0))
+
+# plot our data
+plot(weight ~ length, data=sim_data, col="deepskyblue4", lwd=2, xlab="Frog length (mm)", ylab="Frog weight (g)")
+```
+
+```{r}
+# standardizse data
+model_data <- list(
+ length = standardize(sim_data$length), 
+ weight = standardize(sim_data$weight),
+ sex = sim_data$sex
+)
+```
+
+### Total effect: statistical model
+
+$$
+\large{
+\begin{align*}
+Weight_i \sim Normal(mu_i, sigma)\\
+mu_i = alpha[sex]\\
+alpha[sex] \sim Normal(0,0.5)\\
+sigma \sim Exp(1)
+\end{align*}}
+$$
+
+```{r}
+total_model <- ulam(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha[sex],
+    alpha[sex] ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r}
+# table of posterior estimates
+# ess - is our effective sample size, these are the number of independent samples
+# taken from the chains
+# Rhat - is in an indicator of convergence of the Markov chains to the target 
+# distribution, all being well this should equal one
+precis(total_model, depth=2)
+```
+
+#### Prior predictive simulation
+
+```{r}
+# extract priors
+total_prior <- extract.prior(total_model)
+
+# using only priors make predictions on mean
+mu <- link(total_model, post=total_prior, data=list(sex=c(1,2)))
+
+# plot
+plot(density(mu[,1]), xlab="Prior", lwd=2, ylab="Density", col="deepskyblue4", main="")
+lines(density(mu[,2]), lwd=2, col="orange")
+legend("topright", legend=c('Female', 'Male'), col=c("deepskyblue4", "orange"), lty=1)
+```
+This looks good. Intercepts are where we expect.
+
+Now lets get into some convergence diagnostics.
+
+```{r}
+# HMC chain diagnostics
+# show() - tells you model formula used, and how long each chain took to run
+show(total_model)
+```
+
+```{r, fig.width = 15, fig.height = 5}
+# visualization
+# looking for healthy caterpillars
+# Trace plot
+# stationary, path of a chain stays within the same region of the posterior
+# good mixing, chains rapidly explore the full region, it doesn't slowly wander
+# convergence, multiple, independent chains stick stick around the same region
+traceplot(total_model, pars=c('alpha[1]', 'alpha[2]', 'sigma'))
+```
+```{r, fig.width = 15, fig.height = 5}
+# grey shaded area is the warm-up space of the chains, where the algorithm
+# tries to find good starting values for the step size & number of steps
+# this is NOT representative of the posterior distribution
+
+# Trace rank plot, histograms based on parameter rank,  easier to visualize.
+# if your chains are exploring the same posterior space efficiently,
+# they should be similar and overlapping
+trankplot(total_model,pars=c('alpha[1]', 'alpha[2]', 'sigma'))
+```
+
+```{r}
+# what does an un-healthy caterpillar look like?
+set.seed(11)
+y <- c(-1,1)
+model_bad <- ulam( 
+  alist( 
+    y ~ dnorm( mu , sigma ),
+    mu <- alpha , 
+    alpha ~ dnorm( 0 , 1000 ) , 
+    sigma ~ dexp( 0.0001 ) 
+    ) , data=list(y=y) , chains=3 
+  )
+```
+
+```{r, fig.width = 15, fig.height = 5}
+precis(model_bad)
+traceplot(model_bad)
+trankplot(model_bad)
+```
+
+#### Posterior Plots
+
+```{r}
+# posterior predictions
+mu <- link(total_model,  data=list(sex=c(1,2)))
+
+# final plot of posteriors
+plot(density(mu[,1]), xlab="Posterior", lwd=2, ylab="Density", col="deepskyblue4", main="", xlim=c(-2,2))
+lines(density(mu[,2]), lwd=2, col="orange")
+legend("topright", legend=c('Female', 'Male'), col=c("deepskyblue4", "orange"), lty=1)
+```
+### Direct effect: statistical model
+
+$$
+\large{
+\begin{align*}
+Weight_i \sim Normal(mu_i, sigma)\\
+mu_i = alpha[sex] + \beta L[sex]*Length_i\\
+alpha[sex] \sim Normal(0,0.5)\\
+beta L[sex] \sim Normal(0,0.5)
+sigma \sim Exp(1)
+\end{align*}}
+$$
+
+```{r}
+direct_model <- ulam(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha[sex] + betaL[sex]*length,
+    alpha[sex] ~ dnorm(0, 0.5),
+    betaL[sex] ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+#### Prior predictive simulation
+
+```{r}
+# length sequence for plotting
+length_seq = seq(-2, 2, length.out=30)
+
+# extract priors
+direct_prior <- extract.prior(direct_model)
+
+# get female priors
+f_mu <- link(direct_model, post=direct_prior, data=data.frame(sex=1, length=length_seq))
+f_mu_mean <- apply(f_mu, 2, mean)
+f_mu_PI <- apply(f_mu, 2, PI)
+
+# get male priors
+m_mu <- link(direct_model, post=direct_prior, data=data.frame(sex=2, length=length_seq))
+m_mu_mean <- apply(m_mu, 2, mean)
+m_mu_PI <- apply(m_mu, 2, PI)
+
+# plot
+par(mfrow = c(1, 2))
+plot(weight~length, data=model_data, xlab="Length", lwd=2, ylab="Density", col="deepskyblue4", main="Female Prior", xlim=c(-2,2), ylim=c(-2,2))
+lines(length_seq, f_mu_mean ,lwd=2, col="deepskyblue4")
+shade(f_mu_PI, length_seq)
+plot(weight~length, data=model_data, xlab="Length", lwd=2, ylab="Density", col="deepskyblue4", main="Male Prior", xlim=c(-2,2), ylim=c(-2,2))
+lines(length_seq, m_mu_mean ,lwd=2, col="orange")
+shade(m_mu_PI, length_seq)
+```
+We can do better than this, lets try a lognormal distribution to capture the positive relationship in the slope
+```{r}
+direct_model <- ulam(
+  alist(
+    weight ~ dnorm(mu, sigma),
+    mu <- alpha[sex] + betaL[sex]*length,
+    alpha[sex] ~ dnorm(0, 0.5),
+    betaL[sex] ~ dlnorm(0, 1),
+    sigma ~ dexp(1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+# length sequence for plotting
+length_seq = seq(-2, 2, length.out=30)
+
+# extract priors
+direct_prior <- extract.prior(direct_model)
+
+# get female priors
+f_mu <- link(direct_model, post=direct_prior, data=data.frame(sex=1, length=length_seq))
+f_mu_mean <- apply(f_mu, 2, mean)
+f_mu_PI <- apply(f_mu, 2, PI)
+
+# get male priors
+m_mu <- link(direct_model, post=direct_prior, data=data.frame(sex=2, length=length_seq))
+m_mu_mean <- apply(m_mu, 2, mean)
+m_mu_PI <- apply(m_mu, 2, PI)
+
+# plot
+par(mfrow = c(1, 2))
+plot(weight~length, data=model_data, xlab="Length", lwd=2, ylab="Weight", col="deepskyblue4", main="Female Prior", xlim=c(-2,2), ylim=c(-2,2))
+lines(length_seq, f_mu_mean ,lwd=2, col="deepskyblue4")
+shade(f_mu_PI, length_seq)
+plot(weight~length, data=model_data, xlab="Length", lwd=2, ylab="Weight", col="deepskyblue4", main="Male Prior", xlim=c(-2,2), ylim=c(-2,2))
+lines(length_seq, m_mu_mean ,lwd=2, col="orange")
+shade(m_mu_PI, length_seq)
+```
+
+
+#### Convergence diagnostics
+```{r, fig.width = 15, fig.height = 5}
+show(direct_model)
+precis(direct_model, depth=2)
+traceplot(direct_model, pars=c('alpha[1]', 'alpha[2]', 'betaL[1]', 'betaL[2]', 'sigma'))
+trankplot(direct_model,  pars=c('alpha[1]', 'alpha[2]', 'betaL[1]', 'betaL[2]', 'sigma'))
+```
+#### Posterior predictive
+```{r}
+# length sequence for plotting
+length_seq = seq(-2, 2, length.out=30)
+
+# get full posterior for observed vs predicted
+full_mu <- link(direct_model)
+full_mu_mean <- apply(full_mu, 2, mean)
+full_mu_PI <- apply(full_mu, 2, PI)
+
+plot(full_mu_mean,model_data$weight, xlab="Predicted", lwd=2, ylab="Observed", col="deepskyblue4")
+abline( a=0 , b=1 , lty=2 ) 
+
+# get female posterior
+f_mu <- link(direct_model, data=data.frame(sex=1, length=length_seq))
+f_mu_mean <- apply(f_mu, 2, mean)
+f_mu_PI <- apply(f_mu, 2, PI)
+
+# get male posterior
+m_mu <- link(direct_model, data=data.frame(sex=2, length=length_seq))
+m_mu_mean <- apply(m_mu, 2, mean)
+m_mu_PI <- apply(m_mu, 2, PI)
+
+# plot
+plot(weight~length, data=model_data, xlab="Length", lwd=2, ylab="Weight", col="deepskyblue4", xlim=c(-2,2), ylim=c(-2,2))
+lines(length_seq, f_mu_mean ,lwd=2, col="deepskyblue4")
+shade(f_mu_PI, length_seq, col=col.alpha("deepskyblue4", 0.2))
+lines(length_seq, m_mu_mean ,lwd=2, col="orange")
+shade(m_mu_PI, length_seq, col=col.alpha("orange", 0.2))
+legend("topright", legend=c('Female', 'Male'), col=c("deepskyblue4", "orange"), lty=1)
+```
+
+
