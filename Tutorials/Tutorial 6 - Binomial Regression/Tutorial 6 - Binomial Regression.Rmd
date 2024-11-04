@@ -1,0 +1,266 @@
+---
+title: "Tutorial 6 - Binomial Regression"
+author: "Arun Oakley-Cogan"
+date: "2024-10-21"
+output: html_document
+---
+
+Today, we are working through the first in our series in Generalized Linear Models (glms), the most useful glms deal with counts (non-negative integers). Count data can be difficult to predict with our models as the scale of our predictors are never the same as our outcome scale
+
+**Models for Count Data**
+
+-   Binomial regression - used when data is binary, present/absent, 0/1. 
+-   Poisson regression - used when count data has a unknown maximum.
+
+Binomial regressions are also called **logistic regression** when data is in single-trial cases,\
+or an **aggregated binomial regression** when the outcome is from 0 -\> n (number of total trials).
+
+```{r}
+library(rethinking)
+library(ggplot2)
+rm(list=ls())
+```
+
+We are going to be looking at a data set of the Southern Corroboree frogs that details the presence/absence at a number of different pools, in different sites in the Snowy Mountains, in Australia. Each row in the data is a unique pool in a particular site.
+
+```{r}
+fdata <- read.csv2('Data/frogs.csv')
+precis(fdata)
+```
+
+**Variables:**
+
+1.  pres.abs – 0/1 indicates whether frogs were found.
+2.  easting – reference point
+3.  northing – reference point
+4.  altitude – altitude in meters
+5.  distance – distance in meters to nearest extant population
+6.  NoOfPools– number of potential breeding pools
+7.  NoOfSites– number of potential breeding sites within a 2 km radius
+8.  avrain – mean rainfall for Spring period
+9.  meanmin – mean minimum Spring temperature
+10. meanmix - mean maximum Spring temperature
+
+One way to visualize this data is to plot the pools by their spatial relationship.
+
+```{r}
+plot(northing ~ easting, data = fdata, pch = c(1, 16)[fdata$pres.abs +
+1], col=col.alpha("deepskyblue4", .7) ,xlab = "Meters east of reference point", ylab = "Meters north")
+```
+
+### Define what we are estimating
+
+**Q1. Predict the probability of finding a frog in a pool**
+
+**Q2**. **Understand the relationship between the occurrence of frogs and other environment variables**
+
+This falls under a binomial (logistic) regression as our outcome variable pres.abs is binary 0/1.
+
+```{r}
+plot(pres.abs ~ avrain, data = fdata, pch = c(1, 16)[fdata$pres.abs +
+1], col=col.alpha("deepskyblue4", .7) ,xlab = "Average Spring Rainfall (mm)", ylab = "Presence/Absence")
+```
+
+### Q1 Statistical model
+
+$$
+\large{
+\begin{align*}
+Pressence \sim Binomial(1, p)\\
+p = invlogit(alpha)\\
+alpha \sim Normal(?,?)\\
+\end{align*}}
+$$
+
+```{r}
+model_data <- list(
+  pressence = fdata$pres.abs,
+  avgrain = standardize(fdata$avrain),
+  distance = standardize(fdata$distance),
+  pools = standardize(fdata$NoOfPools)
+)
+```
+
+```{r}
+frog_model <- ulam(
+  alist(
+    pressence ~ dbinom(1, p),
+    logit(p) <- alpha,
+    alpha ~ dnorm(0, 1.5)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+```{r}
+precis(frog_model)
+```
+
+```{r}
+prior1 <- extract.prior(frog_model)
+par(mfrow=c(1,2))
+plot(density(prior1$alpha), main="Prior prediction log-odds scale", col="deepskyblue4", xlab="Probability of occurence")
+plot(density(inv_logit(prior1$alpha)),  main="Prior prediction outcome scale", col="deepskyblue4", xlab="Probability of occurence")
+```
+
+I have no prior knowledge of what the probability of seeing a frog should be, so I want to make this as flat as possible. Let's try another prior with a standard deviation of 1.6.
+
+```{r}
+frog_model <- ulam(
+  alist(
+    pressence ~ dbinom(1, p),
+    logit(p) <- alpha,
+    alpha ~ dnorm(0, 1.6)
+  ), data = model_data, chains = 4, log_lik = T
+)
+
+prior1 <- extract.prior(frog_model)
+par(mfrow=c(1,2))
+plot(density(prior1$alpha), main="Prior prediction log-odds scale", col="deepskyblue4", xlab="Probability of occurence")
+plot(density(inv_logit(prior1$alpha)),  main="Prior prediction outcome scale", col="deepskyblue4", xlab="Probability of occurence")
+```
+
+Not much of a change, but at least a little flatter. Let's go with this for now.
+
+#### Convergence diagnostics
+
+```{r}
+# r_hat and ess
+precis(frog_model)
+```
+
+```{r, fig.width = 15, fig.height = 5}
+# looking for healthy caterpillars
+# Trace plot
+# stationary, path of a chain stays within the same region of the posterior
+# good mixing, chains rapidly explore the full region, it doesn't slowly wander
+# convergence, multiple, independent chains stick stick around the same region
+traceplot(frog_model)
+```
+
+Happy with our convergence and priors, onto our inference!
+
+#### Posterior Plots
+
+```{r}
+posterior_p <- link(frog_model)
+plot(density(posterior_p),  main="Posterior prediction (outcome)", col="deepskyblue4", xlab="Probability of occurence", xlim=c(0,1))
+lines(density(inv_logit(prior1$alpha)), col="orange")
+legend("topleft", legend=c('Posterior', 'Prior'), col=c("deepskyblue4", "orange"), lty=1)
+abline(v=mean(posterior_p))
+```
+
+Lets add some more predictors
+
+### Statistical model
+
+$$
+\large{
+\begin{align*}
+Pressence \sim Binomial(1, p)\\
+p = invlogit(alpha + betaR*avrain + betaP*pools + betaD*distance)\\
+alpha \sim Normal(0,1.6)\\
+beta R \sim Normal(?,?)\\
+beta P \sim Normal(?,?)\\
+beta D \sim Normal(?,?)\\
+\end{align*}}
+$$
+
+What priors should we start with here for our predictors?? Our beta parameters here are representing the change in the log odds of finding a frog when each have been increased by 1. For me, I am not great at thinking about log odds so I will try some flat priors here as well.
+
+```{r}
+frog_full_model <- ulam(
+  alist(
+    pressence ~ dbinom(1, p),
+    logit(p) <- alpha + betaR*avgrain + betaD*distance + betaP*pools,
+    alpha ~ dnorm(0,1.6),
+    betaR ~ dnorm(0, 1),
+    betaD ~ dnorm(0, 1),
+    betaP ~ dnorm(0, 1)
+  ), data = model_data, chains = 4, log_lik = T
+)
+```
+
+#### Prior predictive
+
+```{r}
+prior2 <- extract.prior(frog_full_model)
+prior_p <- link(frog_full_model, post=prior2)
+plot(density(prior_p), main="Prior prediction (outcome)", col="deepskyblue4", xlab="Probability of occurence")
+```
+
+We are getting a bit of a horns effect here, with the densities piling up closer to 0 and 1. Lets tighten these priors a little.
+
+```{r}
+frog_full_model <- ulam(
+  alist(
+    pressence ~ dbinom(1, p),
+    logit(p) <- alpha + betaR*avgrain + betaD*distance + betaP*pools,
+    alpha ~ dnorm(0,1.6),
+    betaR ~ dnorm(0, 0.5),
+    betaD ~ dnorm(0, 0.5),
+    betaP ~ dnorm(0, 0.5)
+  ), data = model_data, chains = 4, log_lik = T
+)
+prior2 <- extract.prior(frog_full_model)
+prior_p <- link(frog_full_model, post=prior2)
+plot(density(prior_p), main="Prior prediction (outcome)", col="deepskyblue4", xlab="Probability of occurence")
+```
+
+This is better, we have a fairly flat prior here. let's run with this and check our convergence.
+
+#### Convergence diagnostics
+
+```{r}
+precis(frog_full_model)
+traceplot(frog_full_model, pars=c('alpha', 'betaR'))
+```
+
+```{r}
+plot(coeftab(frog_full_model))
+```
+
+Interpretation of coefficients.
+
+-   Number of pools, mean: 0.33
+
+The log odds of finding a frog increases by 0.32 when the number of pools increases by 1. Or the odds of finding a frog get multiplied by exp(0.32) (1.39) when increasing the number of pools by 1.
+
+#### Posterior predictive
+
+```{r, fig.width = 15, fig.height = 5}
+# observed vs predicted
+# make predictions of p from our model
+post_p <- link(frog_full_model)
+mean_p <- apply(post_p, 2, mean)
+ci_p <- apply(post_p, 2, PI)
+
+
+# get pools with frogs but low probability
+pres_low <- model_data$pressence == 1 & mean_p < 0.3
+# get pools with no frogs but high probability
+pres_high <- model_data$pressence == 0 & mean_p > 0.6
+
+par(mfrow=c(1,2))
+plot(northing ~ easting, data = fdata, pch = c(1, 16)[fdata$pres.abs +
+1], col=c("deepskyblue4","orange")[factor(pres_low)] ,xlab = "Meters east of reference point", ylab = "Meters north", main="Pools with no frogs but high prob")
+
+plot(northing ~ easting, data = fdata, pch = c(1, 16)[fdata$pres.abs +
+1], col=c("deepskyblue4","red")[factor(pres_high)] ,xlab = "Meters east of reference point", ylab = "Meters north", main="Pools with frogs but low prob")
+```
+
+```{r}
+# another visualization of the posterior estimates
+df <- data.frame(occ=factor(fdata$pres.abs), prob=mean_p)
+# Basic violin plot
+p <- ggplot(df, aes(x=occ, y=mean_p)) + 
+  geom_violin() 
+# violin plot with mean points
+p + stat_summary(fun.y=mean, geom="point", shape=23, size=2) + geom_boxplot(width=0.1)
+
+```
+
+#### Model comparison
+
+```{r}
+compare(frog_model, frog_full_model)
+```
