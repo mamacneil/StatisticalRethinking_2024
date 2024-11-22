@@ -1,0 +1,288 @@
+---
+title: "Tutorial 9 - Covariance"
+author: "Arun Oakley-Cogan"
+date: "2024-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Recently, our discussions have centered around hierarchical models, where we have been getting our models to "partially pool" information about our intercepts. We do this by adding hyper-priors for each our parameter, allowing us to model the population-level of our intercepts.
+
+We saw this in our tadpole example where we pooled information about the average survival rate across tanks.
+
+$$
+\large{
+\begin{align*}
+Survival_i \sim Binomial(Density_i, p_i)\\
+logit(p_i) = alpha_{tank[i]}\\
+\alpha_{tank[i]} \sim Normal(a\_bar, \sigma)\\
+a\_bar \sim Normal(0, 1.5)\\
+\sigma \sim Exp(1)\\
+\end{align*}
+}
+$$
+
+Today, we are going to extend this concept by instructing our model to now pool information across both intercepts and slopes. We do this by modelling the joint population of intercept and slopes, which means modelling their covariance.
+
+As a quick example, recall the lecture where covariance was first introduced, where we were trying to learn about the wait times for different cafes in the morning and afternoon.
+
+$$
+\large{
+Waiting_i \sim Normal(mu_i, sigma_i)\\
+mu_i = alpha_{cafe[i]} + beta_{cafe[i]}*Afternoon\\
+\begin{bmatrix}
+alpha_{cafe[i]}\\
+beta_{cafe[i]}
+\end{bmatrix}   
+\sim MVN(
+\begin{bmatrix}
+\alpha\\
+\beta
+\end{bmatrix}   
+, S)\\
+S = 
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}
+\cdot R \cdot
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}\\
+\alpha \sim Normal(5,2)\\
+\beta \sim Normal(-1,0.5)\\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} \sim Exp(1)\\
+R \sim LKJcorr(2)
+}
+$$
+
+Here, our intercept represents the average wait time in the morning, and our slope is the **difference** between morning and afternoon wait times, with Afternoon being a 0/1 indicator.
+
+Now, we could expect that popular cafes might have high average wait times in the morning, and lower in the afternoon (they are correlated), leading to a large **difference**. For less popular cafes, this **difference** would be much less. So by modelling the covariance our model can improve its learning about mornings by learning about afternoons and viceversa.
+
+For our example today, we are going to be looking at a data set of heights from 26 boys at Oxford University, recorded at 9 different ages, and we are going to be predicting height from age.
+
+```{r}
+# packages
+library(rethinking)
+library(bayesplot)
+```
+
+**Data Exploration**
+
+```{r}
+data(Oxboys)
+data_oxford <- Oxboys
+head(data_oxford, n = 20)
+```
+
+We have four variables: 1. Subject - the individual boy 2. age - mean centered and standardized 3. height - cm 4. Occasion - the sampling id
+
+```{r}
+# plot data 
+plot(height ~ age, type = "n", data = data_oxford)
+for (i in 1:26) {
+  height <- data_oxford$height[data_oxford$Subject == i]
+  age <- data_oxford$age[data_oxford$Subject == i]
+  lines(age, height, col = col.alpha("slateblue", 0.5), lwd = 2)
+}
+```
+
+Ok, so we have a 26 boys, all with increasing heights with respect to average age.
+
+Lets scope out our model.
+
+$$
+\large{
+height_i \sim Normal(mu_i, sigma_i)\\
+mu_i = alpha_{subject[i]} + betaA_{subject[i]}*Age\\
+\begin{bmatrix}
+alpha_{subject[i]}\\
+betaA_{subject[i]}
+\end{bmatrix}   
+\sim MVN(
+\begin{bmatrix}
+\alpha\\
+\beta
+\end{bmatrix}   
+, S)\\
+S = 
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}
+\cdot R \cdot
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}\\
+\alpha \sim Normal(150,20)\\
+\beta \sim Normal(20,10)\\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} \sim Exp(1)\\
+R \sim LKJcorr(2)
+}
+$$
+
+There is a lot happening here, let's go through it line by line. $$
+\large{
+\begin{align*}
+\end{align*}
+}
+$$ $$
+\large{
+\begin{align*}
+height_i \sim Normal(mu_{i}, sigma)\\
+mu_i = alpha_{subject[i]} + betaA_{subject[i]}*Age
+\end{align*}
+}
+$$
+
+First, we have our data likelihood and linear model. Nothing new here. Our intercept a_subject[Subject], is the mean height clustered by individual, our slope b_age is the difference in height, produced by age, clustered by individual.
+
+\$\$ \large{ \begin{align*}
+\begin{bmatrix}
+alpha_{subject[i]}\\
+betaA_{subject[i]}
+\end{bmatrix}   
+\sim MVN(
+\begin{bmatrix}
+\alpha\\
+\beta
+\end{bmatrix}   
+, S)\\
+S = 
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}
+\cdot R \cdot
+\begin{pmatrix}
+\sigma_{\alpha} & 0\\
+0 & \sigma_{\beta}\\
+\end{pmatrix}\\
+
+\end{align*} } \$\$
+
+This is our matrix of varying slopes and intercepts, with the covariance matrix S. We are stating here that each individual boy has an intercept and slope that has a prior , which is distributed with a multivariate-normal, with a means, alpha and beta and covariance matrix S. This prior will adaptively regularize each inidivual slope, intercept and the correlations between them.
+
+The covariance matrix S, is constructed by splitting up the standard deviations (sigma_alpha,beta) and a correlation matrix R.
+
+$$
+\large{
+\begin{align*}
+\alpha \sim Normal(150,20)\\
+\beta \sim Normal(20,10)\\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} \sim Exp(1)\\
+R \sim LKJcorr(2)
+\end{align*}
+}
+$$
+
+These are our hyper priors. The last line states the prior for our correlation matrix, correlations range between -1 and 1. The LKJ distribution is used to define different regularizing priors for correlation matrices. LKJcorr(1) is "flat", and values 2 and above become more skeptical of extreme correlations.
+
+Lets, check out our model.
+
+```{r}
+model_ox <- ulam(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- alpha[Subject] + beta_A[Subject]*age,
+    c(alpha,beta_A)[Subject] ~ multi_normal(c(a,b), Rho, sigma_subject),
+    a ~ dnorm(150,10),
+    b ~ dnorm(0,20),
+    c(sigma,sigma_subject) ~ dexp(1),
+    Rho ~ dlkjcorr(2) 
+  ), data = data_oxford, chains = 4, log_lik = T, control = list(adapt_delta = 0.99)
+)
+```
+
+**Prior predictive**
+
+```{r}
+priors <- extract.prior(model_ox)
+prior_mu <- link(model_ox, post=priors, data=data_oxford)
+prior_mu_mean <- sapply(prior_mu, mean, 2)
+prior_mu_ci <- sapply(prior_mu_mean, PI)
+
+plot(height ~ age, data=data_oxford, pch=16, col= col.alpha("slateblue", 0.5))
+
+for (i in 1:100) {
+  lines(data_oxford$age, prior_mu[i,],  col= col.alpha("black", 0.2))
+}
+```
+
+These don't look too bad, plus we have over 200 observations, this should be fine.
+
+**Convergence diagnostics**
+
+```{r}
+precis(model_ox, depth=3, pars=c('a', 'b', 'sigma_subject'))
+```
+
+Rhat and ESS looking good.
+
+**Convergence Diagnostics**
+
+```{r}
+traceplot(model_ox, pars=c('a', 'b', 'sigma_subject[1]', 'sigma_subject[2]'))
+```
+
+**Model Evaluation - Posterior Predictions**
+
+```{r}
+# posterior predictive densities
+posterior <- extract.samples(model_ox)
+post_mu <- link(model_ox, data = data_oxford)
+post_mu_mean <- apply(post_mu,2,mean)
+post_mu_ci <- apply(post_mu,2,PI, 0.89)
+plot(density(data_oxford$height), col="orange", lty=2, lwd=2, main='')
+lines(density(post_mu_mean), col="red", lwd=3)
+for(i in 1:50) lines(density(post_mu[i,]), col=col.alpha(rangi2, alpha=0.3))
+legend("topleft", legend=c("Observed Heights", "Posterior Mean", "Posterior Predictive"), 
+       col=c("orange", "red", rangi2), lty = c(2,1,1))
+mtext("Posterior Predictive")
+```
+
+Nice!
+
+```{r}
+# predictions - observed vs predicted
+plot(data_oxford$height, post_mu_mean, xlab="Observed", 
+     ylab="Predicted", pch=16, col=rangi2)
+lines(c(min(data_oxford$height), max(data_oxford$height)),
+      c(min(data_oxford$height), max(data_oxford$height)), lty=2, 
+      col="red")
+```
+
+Couldn't be happier.
+
+Let's go back to our parameter estimates.
+
+```{r}
+precis(model_ox, depth=3, pars = c("a", "b", "sigma_subject"))
+```
+
+Let’s interpret the intercept **a** first. **a** is the population level mean of average height. Since the predictor age is standardized, the intercept is the average height at the average age. Then the average slope **b** is average change in height for unit change in standard age. So over the whole sample, which is about 2 units of standard age, the average boy grew about 2 × 6.55 = 13.1 cm
+
+Lets take a look at the correlation between the intercepts and slopes
+
+```{r}
+precis(model_ox, depth=3, pars = "Rho")
+```
+
+So the posterior distribution of the correlation between intercepts and slopes has a mean of 0.52 and an 89% interval from 0.3 to 0.71. This is what it looks like:
+
+```{r}
+rho <- posterior$Rho[,1,2]
+dens( rho , xlab="rho" , xlim=c(-1,1) )
+```
+
+This positive correlation suggests that larger intercepts are associated with larger slopes. In more meaningful terms, this means that boys who are bigger also grow faster. If you go back and look at the original plot of height vs age, you might be able to see this more clearly.
+
+The boys who were tallest at the start also grew the fastest. The boys who were shortest at the start also grew the slowest. As a result, the difference between the tallest and shortest boys grew over time.
+
+To appreciate the value of this inference, consider we had a new sample of boys that is purely cross-sectional. No data had yet been observed. But on the basis of this correlation, you might predict that the tallest boys in the new sample would grow the fastest. This would let you make better predictions, assuming of course that this result generalizes to another sample.

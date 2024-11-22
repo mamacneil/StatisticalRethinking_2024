@@ -1,0 +1,319 @@
+---
+title: "Tutorial 8 - Hierarchical Models"
+author: "Arun Oakley-Cogan"
+date: "2024-11-02"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+rm(list=ls())
+write.csv(Fish, 'Fish.csv')
+```
+
+Today we are going to look at Hierarchical\\MultiLevel\\Varying Intercepts\\Partial Pooling\\Random Effects models, and we are going to compare them with their traditional fixed-effects model counterparts we have been focusing on throughout this course.
+
+**Tadpole example**
+
+```{r}
+data("reedfrogs")
+tdata <- reedfrogs
+head(tdata)
+```
+
+Fixed Effects Model
+
+$$
+\large{
+\begin{align*}
+Survival_i \sim Binomial(Density_i, p_i)\\
+logit(p_i) = alpha_{tank[i]}\\
+alpha_{tank[i]} \sim Normal(?, ?)\\
+\end{align*}
+}
+$$
+
+A fixed-effects model, for each tank, we index them from 1 -\> 48, the model will pull out the information about each tank, and adjust the average outcome (survival), so that some tanks are on average have a better survival rate than others. The information that gets left of the table is that this model forgets everything knows about each tank as it moves from one tank to the next.
+
+However, this is very inefficient because while each tank is different, they are also alike, and the model starts off with some naive prior about the differences between tanks, and when it learns about one tank it should be updating that prior so that it can use that information to learn about the next tank, this assists the model in learning about the tanks quicker.
+
+```{r}
+# create our categorical index variabkes
+tdata$tank <-  1:nrow(tdata)
+head(tdata)
+```
+
+**Prior predictive simulation**
+
+```{r}
+# let's start of with a prior, where we think that mean survival is at roughly 50%, not considering the switching of scales between our linear model and out outcome distribution.
+N <- 1000 # number of samples
+tank_prior_1 <- rnorm(N, 0.5, 0.1 )
+
+plot(density(tank_prior_1), xlim=c(-1,1), xlab="Log-Odds Scale", main="Prior predictive plot")
+plot(density(inv_logit(tank_prior_1)), xlim=c(0,1), xlab="Probability Scale", main="Prior predictive plot")
+
+```
+
+```{r}
+# let's try and get that prior to be 50% on the OUTCOME scale.
+# starting off with a N(0,1)
+tank_prior_2 <- rnorm(N, 0, 1)
+plot(density(tank_prior_2), xlab="Log-Odds Scale", main="Prior predictive plot")
+plot(density(inv_logit(tank_prior_2)), xlim=c(0,1), xlab="Probability Scale", main="Prior predictive plot")
+```
+
+```{r}
+# that's actually not too bad, we could make this a little more regularizing (skeptical) of extreme values
+# I'll tighten this up by decreasing the variance.
+tank_prior_3 <- rnorm(N, 0, 0.6)
+plot(density(tank_prior_3), xlab="Log-Odds Scale", main="Prior predictive plot", col="deepskyblue4")
+lines(density(tank_prior_2), col="orange")
+legend("topright", legend=c("Tank N(0,0.75) Prior", "Tank N(0,0.1) Prior"), col=c("deepskyblue4", "orange"), lty=c(1,1))
+plot(density(inv_logit(tank_prior_3)), xlim=c(0,1), xlab="Probability Scale", main="Prior predictive plot",  col="deepskyblue4")
+lines(density(inv_logit(tank_prior_2)), , col="orange")
+legend("topright", legend=c("Tank N(0,0.75) Prior", "Tank N(0,1) Prior"), col=c("deepskyblue4", "orange"), lty=c(1,1))
+```
+
+**Data setup**
+
+```{r}
+list_tad <- list(
+  survival = tdata$surv,
+  density = tdata$density,
+  tank = tdata$tank
+)
+```
+
+**Model setup**
+
+```{r}
+model_tad <- ulam(
+  alist(
+    survival ~ dbinom(density, p), # data likelihood
+    logit(p) <- alpha[tank],
+    alpha[tank] ~ dnorm(0,0.6)
+  ), data=list_tad, chains=4, log_lik = TRUE
+)
+```
+
+Let's take our first look at how the model is doing ..
+
+**Posterior Estimates & Diagnostics**
+
+```{r}
+precis(model_tad, depth=2)
+traceplot(model_tad)
+```
+
+**Posterior Predictions**
+
+```{r}
+plot(precis(model_tad, depth=2))
+posterior <- extract.samples(model_tad)
+mean_surv <- inv_logit(apply(posterior$alpha, 2, mean))
+
+plot( tdata$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" , xlab="tank" , ylab="proportion survival" , col=1 ) 
+axis( 1 , at=c(1,16,32,48) , labels=c(1,16,32,48) )
+points(mean_surv, col=4)
+abline( h=mean(tdata$propsurv) , lty=2, col=1 )
+abline( h=mean(mean_surv) , lty=2, col=4 )
+#abline( h=mean(inv_logit(tank_prior)) , lty=1, col=4 )
+legend("bottomleft", legend = c("Observed Proportions", "Fixed-Effect Proportions"), col = c(1,4), pch = c(16, 1))
+```
+
+Hierarchical Model, Bayes Notation
+
+These models do not to forget about each tank, as it both models the observations of each tank, but also models the populations of tanks at the same time. Doing so allows the model to have some memory of each tank.
+
+$$
+\large{
+\begin{align*}
+Survival_i \sim Binomial(Density_i, p_i)\\
+logit(p_i) = alpha_{tank[i]}\\
+\alpha_{tank[i]} \sim Normal(a\_bar, \sigma)\\
+a\_bar \sim Normal(0, 1.5)\\
+\sigma \sim Exp(1)\\
+\end{align*}
+}
+$$
+
+**Prior predictive simulation**
+
+```{r}
+N <- 1000 # number of samples
+a_bar_prior <- rnorm(N, 0, 1.5)
+sigma_prior <- rexp(N, 1)
+tank_prior <- rnorm(N, a_bar_prior, sigma_prior)
+
+plot(density(tank_prior), xlim=c(-7,7), ylim=c(0,1), xlab="Log-Odds Scale", main="Prior predictive plot")
+legend("topright", legend=c("Tank Survival Prior"), col=c("black"), lty=c(1,1))
+plot(density(inv_logit(tank_prior)), xlim=c(0,1), ylim=c(0,4), xlab="Probability Scale", main="Prior predictive plot")
+legend("topright", legend=c("Tank Prior"), col=c("black"), lty=c(1,1))
+```
+
+**Model setup**
+
+```{r}
+model_tad_h <- ulam(
+  alist(
+    survival ~ dbinom(density, p), # data likelihood
+    logit(p) <- alpha[tank],
+    alpha[tank] ~ dnorm(a_bar,sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1)
+  ), data=list_tad, chains=4, log_lik = TRUE
+)
+```
+
+Model Comparison Visual
+
+```{r}
+posterior_h <- extract.samples(model_tad_h)
+mean_surv <- inv_logit(apply(posterior$alpha, 2, mean))
+mean_surv_h <- inv_logit(apply(posterior_h$alpha, 2, mean))
+
+plot( tdata$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" , xlab="tank" , ylab="proportion survival" , col=1 ) 
+axis( 1 , at=c(1,16,32,48) , labels=c(1,16,32,48) )
+points(mean_surv, col=4)
+points(mean_surv_h, col=2)
+abline( h=mean(inv_logit(posterior_h$a_bar)) , lty=2, col=2 )
+abline( h=mean(mean_surv) , lty=2, col=4 )
+legend("bottomleft", legend = c("Observed Proportions", "Fixed-Effect Proportions","Hierarchy Proportions"), col = c(1,4,2), pch = c(16, 1, 1))
+```
+
+Where shrinkage is stronger, the further a tank raw proportion is from the global average
+
+```{r}
+compare( model_tad , model_tad_h )
+```
+
+Let's add in another covariate and see if we can better model the survival. Hopefully, it is obvious that having a predator in the tank would decrease the survival of tadpoles in a tank.
+
+Fixed Effects Model
+
+$$
+\large{
+\begin{align*}
+Survival_i \sim Binomial(Density_i, p_i)\\
+logit(p_i) = alpha_{tank[i]} + betaP*Pred\\
+alpha_{tank[i]} \sim Normal(0, 0.6)\\
+betaP_{tank[i]} \sim Normal(?, ?)\\
+\end{align*}
+}
+$$
+
+```{r}
+# create a dummy/binary variable for predators in a tank
+tdata$pred_id <-  ifelse(tdata$pred == "no", 0L, 1L)
+```
+
+**Prior predictive simulation**
+
+```{r}
+# So here betaP is the DIFFERENCE in average survival for tanks that have a predator. 
+# I assume this will be a negative difference
+N <- 1000 # number of samples
+# prior plots
+tank_prior <- rnorm(N, 0, 0.6 )
+pred_prior <- rnorm(N,-0.5, 1)
+plot(density(tank_prior), xlab="Log-Odds Scale", main="Prior plot", col="deepskyblue4")
+lines(density(pred_prior), col="orange")
+plot(density(inv_logit(tank_prior)), xlim=c(0,1), xlab="Probability Scale", main="Prior plot", col="deepskyblue4")
+lines(density(inv_logit(pred_prior)), col="orange")
+```
+
+```{r}
+# prior predictive plots
+plot(density(tank_prior + pred_prior), xlab="Log-Odds Scale", main="Prior Predictive plot")
+plot(density(inv_logit(tank_prior + pred_prior)), xlim=c(0,1), xlab="Probability Scale", main="Prior Predictive plot")
+```
+
+**Data setup**
+
+```{r}
+list_tad_p <- list(
+  survival = tdata$surv,
+  density = tdata$density,
+  pred_id = as.integer(tdata$pred_id),
+  tank = tdata$tank,
+  pred = as.integer(tdata$pred_id) + 1
+)
+```
+
+**Model setup**
+
+```{r}
+model_tad_p <- ulam(
+  alist(
+    survival ~ dbinom(density, p), # data likelihood
+    logit(p) <- alpha[tank] + betaP*pred_id,
+    alpha[tank] ~ dnorm(0,0.6),
+    betaP ~ dnorm(-0.5, 1)
+  ), data=list_tad_p, chains=4, log_lik = TRUE
+)
+```
+
+```{r}
+precis(model_tad_p, depth=2)
+```
+
+**Posterior Predictions**
+
+```{r}
+posterior_p <- extract.samples(model_tad_p)
+mean_surv_p <- link(model_tad_p)
+mu_mean_surv_p <- apply(mean_surv_p, 2, mean)
+plot( tdata$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" , xlab="tank" , ylab="proportion survival" , col=1 ) 
+axis( 1 , at=c(1,16,32,48) , labels=c(1,16,32,48) )
+points(mu_mean_surv_p, col="orange")
+points(mean_surv, col="deepskyblue4")
+abline( h=mean(tdata$propsurv) , lty=2, col=1 )
+abline( h=mean(mean_surv_p) , lty=2, col="orange" )
+legend("bottomleft", legend = c("Observed Proportions", "Fixed-Effect Predators", "Fixed-Effect No Pred"), col = c(1,"orange", "deepskyblue4"), pch = c(16, 1, 1))
+```
+
+$$
+\large{
+\begin{align*}
+Survival_i \sim Binomial(Density_i, p_i)\\
+logit(p_i) = \alpha_{tank[i]} + betaP*Pred\\
+\alpha_{tank[i]} \sim Normal(a\_bar, \sigma)\\
+a\_bar \sim Normal(0, 1.5)\\
+\sigma \sim Exp(1)\\
+betaP \sim Normal(-0.5,1)
+\end{align*}
+}
+$$
+
+```{r}
+model_tad_ph <- ulam(
+  alist(
+    survival ~ dbinom(density, p), # data likelihood
+    logit(p) <- alpha[tank] + betaP*pred_id,
+    alpha[tank] ~ dnorm(a_bar,sigma),
+    a_bar ~ dnorm(0, 1.5),
+    sigma ~ dexp(1),
+    betaP ~ dnorm(-0.5,1)
+  ), data=list_tad_p, chains=4, log_lik = TRUE
+)
+```
+
+```{r}
+posterior_hp <- extract.samples(model_tad_ph)
+mean_surv_hp <- link(model_tad_ph)
+mu_mean_surv_hp <- apply(mean_surv_hp, 2, mean)
+plot( tdata$propsurv , ylim=c(0,1) , pch=16 , xaxt="n" , xlab="tank" , ylab="proportion survival" , col=1 ) 
+axis( 1 , at=c(1,16,32,48) , labels=c(1,16,32,48) )
+points(mean_surv_h, col="orange")
+points(mu_mean_surv_hp, col="red")
+abline( h=mean(inv_logit(posterior_hp$a_bar)) , lty=2, col="red" )
+abline( h=mean(inv_logit(posterior_hp$a_bar + posterior_hp$betaP)) , lty=2, col="green" )
+abline( h=mean(inv_logit(posterior_h$a_bar)) , lty=2, col="orange" )
+#abline( h=mean(inv_logit(posterior_h$a_bar)) , lty=2, col="red" )
+legend("bottomleft", legend = c("Observed Survival","Hierarchy Survival", 'Heirarchy w/ Pred Survival'), col = c(1,"orange", "red"), pch = c(16, 1, 1))
+```
+
+```{r}
+plot(coeftab(model_tad_h, model_tad_ph), pars=c("sigma", "betaP", "a_bar"))
+```
